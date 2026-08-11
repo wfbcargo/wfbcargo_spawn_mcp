@@ -171,6 +171,70 @@ async function rebaseOntoHead(
   return { pulled: { from: base, to: head.json.version, by } };
 }
 
+export type InitResult =
+  | { ok: true; summary: Record<string, unknown> }
+  | { ok: false; error: string };
+
+/**
+ * Scaffold a project directory: gitignore secrets, world/ + scripts/, pull the
+ * current spec into game.json with rails, materialize scripts, save docs.
+ *
+ * Shared by `spawn_init` and `spawn_team_add`, so provisioning a teammate's
+ * worktree cannot drift from provisioning your own.
+ */
+export async function initProject(dir: string, env: SpawnEnv): Promise<InitResult> {
+  const gitignored = ensureGitignore(dir);
+  for (const sub of ["world", "scripts"]) {
+    const p = join(dir, sub);
+    if (!existsSync(p)) mkdirSync(p, { recursive: true });
+  }
+
+  const notes: string[] = [];
+  if (gitignored.length) notes.push(`gitignored ${gitignored.join(", ")}`);
+
+  const gamePath = join(dir, "game.json");
+  let version: number | undefined;
+  let scriptsMaterialized = 0;
+
+  if (existsSync(gamePath)) {
+    notes.push("game.json already present — left untouched (use spawn_latest to pull)");
+  } else {
+    const { status, json } = await api(env, "GET", variantPath(env, "/game-specs/latest"));
+    if (status !== 200) return { ok: false, error: `init: latest failed (${status}): ${json?.error}` };
+    version = json.version;
+    writeBaseVersion(dir, json.version);
+    writeBaseScripts(dir, specScriptsByFilePath(json.gameSpec ?? {}));
+    writeBaseGame(dir, json.gameSpec ?? {});
+    const { written, gameSpec } = materializeScripts(dir, json.gameSpec ?? {});
+    scriptsMaterialized = written;
+    saveFile(gamePath, JSON.stringify(gameSpec, null, 2));
+    notes.push(`game.json = saved spec v${json.version}`);
+    if (written) notes.push(`materialized ${written} script(s) into scripts/`);
+  }
+
+  const docs = await api(env, "GET", variantPath(env, "/agent/docs"));
+  if (docs.status !== 200)
+    return { ok: false, error: `init: docs failed (${docs.status}): ${docs.json?.error}` };
+  saveFile(join(dir, ".spawn", "guide.md"), docs.json.guide ?? "");
+  saveFile(join(dir, ".spawn", "tome-api.md"), docs.json.tomeApi ?? "");
+  saveFile(join(dir, ".spawn", "skills.json"), JSON.stringify(docs.json.skills ?? [], null, 2));
+
+  return {
+    ok: true,
+    summary: {
+    projectDir: dir,
+    version,
+    scriptsMaterialized,
+    engineVersion: docs.json.engineVersion,
+    specVersion: docs.json.specVersion,
+    playUrl: `${env.apiUrl}${docs.json.playUrl ?? ""}`,
+    docsWarnings: docs.json.errors ?? [],
+    notes,
+    next: 'Read .spawn/guide.md and .spawn/tome-api.md, then load the craft for what you are about to build: spawn_skill ids: ["…"] — every domain the work touches, look skills included (a scene is world-composition + looks, a HUD is game-ui + drawn-art). spawn_skills lists all of them.',
+    },
+  };
+}
+
 type SkillEntry = { id?: string; name?: string; description?: string };
 
 /** Read the skills index `spawn_init` / `spawn_docs` already saved, if usable. */
@@ -380,54 +444,8 @@ export function registerTools(server: McpServer): void {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-
-      const gitignored = ensureGitignore(dir);
-      for (const sub of ["world", "scripts"]) {
-        const p = join(dir, sub);
-        if (!existsSync(p)) mkdirSync(p, { recursive: true });
-      }
-
-      const notes: string[] = [];
-      if (gitignored.length) notes.push(`gitignored ${gitignored.join(", ")}`);
-
-      const gamePath = join(dir, "game.json");
-      let version: number | undefined;
-      let scriptsMaterialized = 0;
-
-      if (existsSync(gamePath)) {
-        notes.push("game.json already present — left untouched (use spawn_latest to pull)");
-      } else {
-        const { status, json } = await api(env, "GET", variantPath(env, "/game-specs/latest"));
-        if (status !== 200) return err(`init: latest failed (${status}): ${json?.error}`);
-        version = json.version;
-        writeBaseVersion(dir, json.version);
-        writeBaseScripts(dir, specScriptsByFilePath(json.gameSpec ?? {}));
-        writeBaseGame(dir, json.gameSpec ?? {});
-        const { written, gameSpec } = materializeScripts(dir, json.gameSpec ?? {});
-        scriptsMaterialized = written;
-        saveFile(gamePath, JSON.stringify(gameSpec, null, 2));
-        notes.push(`game.json = saved spec v${json.version}`);
-        if (written) notes.push(`materialized ${written} script(s) into scripts/`);
-      }
-
-      const docs = await api(env, "GET", variantPath(env, "/agent/docs"));
-      if (docs.status !== 200) return err(`init: docs failed (${docs.status}): ${docs.json?.error}`);
-      saveFile(join(dir, ".spawn", "guide.md"), docs.json.guide ?? "");
-      saveFile(join(dir, ".spawn", "tome-api.md"), docs.json.tomeApi ?? "");
-      saveFile(join(dir, ".spawn", "skills.json"), JSON.stringify(docs.json.skills ?? [], null, 2));
-
-      return text({
-        ok: true,
-        projectDir: dir,
-        version,
-        scriptsMaterialized,
-        engineVersion: docs.json.engineVersion,
-        specVersion: docs.json.specVersion,
-        playUrl: `${env.apiUrl}${docs.json.playUrl ?? ""}`,
-        docsWarnings: docs.json.errors ?? [],
-        notes,
-        next: 'Read .spawn/guide.md and .spawn/tome-api.md, then load the craft for what you are about to build: spawn_skill ids: ["…"] — every domain the work touches, look skills included (a scene is world-composition + looks, a HUD is game-ui + drawn-art). spawn_skills lists all of them.',
-      });
+      const result = await initProject(dir, env);
+      return result.ok ? text({ ok: true, ...result.summary }) : err(result.error);
     }
   );
 

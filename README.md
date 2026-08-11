@@ -97,6 +97,8 @@ Opt-in bookkeeping for the above. Set `SPAWN_TEAM=1` in the first session's MCP 
 | `spawn_team_init` | Create the ledger if absent, register this worktree under a label |
 | `spawn_team_status` | Every agent, how far behind head each rail is, who has unresolved receipts, open claims, recent pushes |
 | `spawn_team_claim` / `spawn_team_release` | Take or give up ownership of `game.json` key paths and `scripts/` globs |
+| `spawn_team_add` | Stand up a new agent's worktree: variant, own token, scaffold, roster entry |
+| `spawn_team_brief` | Ready-to-paste opening prompt for one builder, or the whole team |
 
 Four behaviours change while it is on:
 
@@ -109,7 +111,20 @@ Claim `game.json` key paths (`entities.player`, `world.terrain`) and script glob
 
 Solo, none of this exists: the tool list stays at 27, nothing latches, and pushes take no lock.
 
-The fuller design, including what is deliberately not built, is in [TEAM-MODE.md](TEAM-MODE.md). `spawn_team_add` and `spawn_team_brief` are still proposals there.
+Adding an agent is two calls plus one command you run yourself:
+
+```
+spawn_team_add label="terrain" worktreePath="../game-terrain" branch="terrain"
+  → returns: git worktree add -b terrain ../game-terrain     # run it; this server never executes git
+spawn_team_add label="terrain" worktreePath="../game-terrain" bootstrapKey="sbk_…"
+  → writes its variant, trades the key for its OWN token, scaffolds, registers it
+spawn_team_brief label="terrain"
+  → the opening prompt to paste into a session started in that worktree
+```
+
+Mint the `sbk_` key just before the second call: they are single-use and expire in about five minutes. `spawn_team_brief` with no label briefs the whole team at once.
+
+The fuller design, including what is deliberately not built and why, is in [TEAM-MODE.md](TEAM-MODE.md).
 
 ### What a pull merges
 

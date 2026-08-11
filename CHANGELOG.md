@@ -2,16 +2,18 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-08-11
 
 Running several agents against one game (see [TEAM-MODE.md](TEAM-MODE.md)). A Spawn identity is a property of a project directory, not of a session, so one git worktree per agent gives you a team with no connection registry and no agent runtime in this server.
 
 ### Added
 
-- **Team mode**, off unless `SPAWN_TEAM=1` or a ledger already exists. Adds two tools and leaves the solo tool list at 27.
+- **Team mode**, off unless `SPAWN_TEAM=1` or a ledger already exists. Adds six tools and leaves the solo tool list at 27.
   - **`spawn_team_init`**: create the shared ledger if absent and register this worktree under a label. The ledger lives in the repo's common `.git/spawn-team/`, so every worktree resolves to the same path with no configuration, it is scoped to one game, and it cannot be committed by accident. `SPAWN_TEAM_DIR` overrides for agents that are not worktrees of one repo. Warns when a worktree has no key of its own, when its key came from the MCP config rather than its `.env`, and when its variant differs from the rest of the team.
   - **`spawn_team_status`**: the whole team at a glance: every agent, how far behind head each local rail is, whose worktree has unresolved conflict receipts, open claims, recent pushes, and head vs published.
   - **`spawn_team_claim` / `spawn_team_release`**: ownership of `game.json` key paths (`entities.player`) and `scripts/` globs (`scripts/hud/**`). Everything except `scripts/**` is claimed by key path, because that is where `spawn_init` puts the whole spec; a pattern that looks like a file path outside `scripts/` is rejected rather than silently never matching.
+  - **`spawn_team_add`**: stands up a new agent in one call: writes its variant, trades its one-time key for its own token, scaffolds the project, and registers it. Called before the worktree exists it returns the exact `git worktree add` command instead of running it, because this server executes no subprocesses. It refuses to proceed without a distinct key for the new agent: sharing one token would make every agent indistinguishable on the version rail.
+  - **`spawn_team_brief`**: a ready-to-paste opening prompt for one builder or the whole team, covering who it is, its worktree, what it owns, what teammates own, whether it is behind head, and the working rules. Text out; the LLM decides what to do with it. This is the dispatch affordance, and it is deliberately not an agent runtime.
 - **Pushes serialise and rebase in team mode.** `spawn_push` takes a ledger-wide lock, and from inside it "behind head" can only mean a teammate landed a push since your last sync, so it pulls first. A clean rebase costs nothing and the 409 never happens; a rebase that collides stops the push with your work intact and the colliding paths named. `force: true` skips it, being a deliberate whole-replace. The lock's stale window is longer than the HTTP timeout so a slow push cannot have its lock stolen mid-flight.
 - **Claim warnings on push, and attribution instead of "someone else".** Changes are diffed against the base rails, so exactly this agent's own edits get checked against other agents' claims, and collisions are reported alongside the successful push rather than blocking it. Every push is logged to `pushes.jsonl`, so a 409 names the teammate who took the version and what they touched, and `spawn_latest` says whose push you just pulled.
 - **The session latch.** `spawn_push`, `spawn_latest applyLocal`, `spawn_revoke`, and `spawn_play_open` bind to the first project directory they see and refuse a second, because identity, the `.spawn/base-version` rail, and the single Chromium session all belong to one directory. Read-only tools still inspect any worktree, and provisioning (`spawn_bootstrap`, `spawn_init`) stays unlatched so a new worktree can be set up from anywhere.
@@ -27,7 +29,8 @@ Running several agents against one game (see [TEAM-MODE.md](TEAM-MODE.md)). A Sp
 - Existing projects have no `.spawn/base-game.json`, so the first pull after upgrading keeps the old whole-replace behaviour, copies the previous `game.json` to `.spawn/replaced-game.json` when it would drop anything, and establishes the rail. Pulls merge from then on. `spawn_status` reports `hasSpecRail`.
 - `world/*.json` overlays are still not reconciled: they re-apply over pulled content at compile time. Disjoint overlays compose fine, overlapping ones do not. In practice `spawn_init` puts the whole spec in `game.json` and leaves `world/` empty, so the key-path merge covers the common case.
 - The shared `.git` is located by reading `.git` directly (a directory in a main checkout, a `gitdir:` pointer plus `commondir` in a worktree) rather than by running `git rev-parse`. This server still spawns no subprocesses.
-- `spawn_team_add` and `spawn_team_brief` are designed but not built.
+- Tool count is unchanged at 27 solo, and 33 with team mode on.
+- `spawn_init`'s scaffolding is now shared with `spawn_team_add`, so provisioning a teammate's worktree cannot drift from provisioning your own.
 
 ## [1.3.0] - 2026-08-11
 
@@ -63,4 +66,5 @@ Untagged. The project declared `1.2.0` in its very first commit and never moved,
 - A plain-language getting-started guide.
 - Fixes to the play browser and `spawn_exec` found by an end-to-end build, and a test-script fix for Node 20 and Windows, where `node --test` does not expand globs.
 
+[1.4.0]: https://github.com/wfbcargo/wfbcargo_spawn_mcp/releases/tag/v1.4.0
 [1.3.0]: https://github.com/wfbcargo/wfbcargo_spawn_mcp/releases/tag/v1.3.0

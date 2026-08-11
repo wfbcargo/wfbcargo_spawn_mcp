@@ -1,8 +1,7 @@
 # Team mode (design sketch)
 
-> Status: **phases 0, 1 and 2 landed.** The three fixes, the ledger, the roster and claim
-> tools, the session latch, the push lock, and attribution are built. Only `spawn_team_add` and
-> `spawn_team_brief` (phase 3) remain proposals. Decisions are recorded at the bottom.
+> Status: **all four phases landed**, shipped as 1.4.0. Everything described below is built.
+> Decisions, and the reasoning behind each, are recorded at the bottom.
 
 ## The idea in one line
 
@@ -161,8 +160,8 @@ ledger degrades to solo behaviour rather than blocking work.
 | `spawn_team_init` | Create the ledger if absent, register this worktree under a label | built |
 | `spawn_team_status` | Roster, each agent's base version, head version, who is behind, who is blocked by receipts | built |
 | `spawn_team_claim` / `spawn_team_release` | Claim `game.json` key paths and script globs for a label | built |
-| `spawn_team_add` | Emit the `git worktree add` command, then bootstrap and init the new agent | phase 3 |
-| `spawn_team_brief` | Emit a ready-to-paste opening prompt for one builder: worktree path, its claims, head version, the rules | phase 3 |
+| `spawn_team_add` | Emit the `git worktree add` command, then bootstrap and init the new agent | built |
+| `spawn_team_brief` | Emit a ready-to-paste opening prompt for one builder: worktree path, its claims, head version, the rules | built |
 
 Per decision 5, `spawn_team_add` returns the `git worktree add` command for the LLM to run
 through its own shell rather than executing it here. Keeping this server free of process
@@ -241,7 +240,7 @@ fix.
 | 0 **(done)** | Identity precedence, `game.json` three-way merge and receipts | everyone, solo included |
 | 1 **(done)** | Ledger, `spawn_team_init`, `spawn_team_status`, the session latch | first real team run |
 | 2 **(done)** | Claims, push lock, teammate attribution on 409 | teams larger than two |
-| 3 | `spawn_team_add`, `spawn_team_brief` | ergonomics |
+| 3 **(done)** | `spawn_team_add`, `spawn_team_brief` | ergonomics |
 
 Phases 0 and 1 together make host-driven multi-agent work with no new concepts: a worktree per
 agent, a session per worktree, and a status view.
@@ -268,5 +267,4 @@ agent, a session per worktree, and a status view.
    matters for a project already committed to overlays, rather than something we would be
    pushing every team into.
 
-Versioning: everything so far sits under `[Unreleased]`. The bump to 1.4.0 waits until phases 2
-and 3 land, so team mode ships as one coherent version rather than three partial ones.
+Shipped as 1.4.0: team mode landed as one coherent version rather than three partial ones.
