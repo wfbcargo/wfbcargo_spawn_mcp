@@ -38,6 +38,8 @@ See `mcp.example.json`. On Windows use forward slashes (`C:/Users/you/...`).
 |---------|---------|---------|
 | `SPAWN_PROJECT_DIR` | process cwd | Game project holding `game.json` / `.env` |
 | `SPAWN_PLAY_HEADED` | `1` | `0` forces headless (see the warning below); games will not render |
+| `SPAWN_TEAM` | unset | `1` enables team mode: adds `spawn_team_*` and the session latch |
+| `SPAWN_TEAM_DIR` | shared `.git/spawn-team` | Ledger location, for agents that are not worktrees of one repo |
 | `SPAWN_HTTP_TIMEOUT_MS` | `60000` | Abort API calls that hang |
 | `SPAWN_API_URL` | pinned in `src/config.ts` | Dev override only; must be `https` (or localhost) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright default | Override where Chromium is installed |
@@ -85,6 +87,24 @@ spawn_latest                 # pull head (conflict recovery)
 spawn_latest mode=live       # inspect published (no local write)
 spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 ```
+
+### Team mode
+
+Opt-in bookkeeping for the above. Set `SPAWN_TEAM=1` in the first session's MCP config and run `spawn_team_init` in each agent's worktree. That writes a roster into the repo's shared `.git/spawn-team/`, which every worktree finds with no configuration and nobody can commit by accident, so later sessions pick the mode up on their own and need no extra config.
+
+| Tool | Purpose |
+|------|---------|
+| `spawn_team_init` | Create the ledger if absent, register this worktree under a label |
+| `spawn_team_status` | Every agent, how far behind head each rail is, who has unresolved receipts, head vs published |
+
+Two behaviours change while it is on:
+
+- **One session drives one agent.** `spawn_push`, `spawn_latest applyLocal`, `spawn_revoke`, and `spawn_play_open` latch to the first project directory they see and refuse a second one. Identity, the version rail, and the single Chromium session all belong to one directory, so driving two from one session pushes one agent's work onto the other's rail and points its screenshots at the wrong client. Read-only tools stay free to inspect any worktree, and `spawn_bootstrap` / `spawn_init` stay free so a new worktree can be provisioned from anywhere.
+- **A globally configured `SPAWN_PROJECT_DIR` is refused**, with an explanation, rather than used. It would resolve every session to one `.env`, so every agent would push as the same connection while appearing to work in its own worktree. An explicit `projectDir` argument is never refused.
+
+Solo, none of this exists: the tool list stays at 27 and nothing latches.
+
+The fuller design, including what is deliberately not built, is in [TEAM-MODE.md](TEAM-MODE.md). Claims, the push lock, and `spawn_team_add` are still proposals there.
 
 ### What a pull merges
 

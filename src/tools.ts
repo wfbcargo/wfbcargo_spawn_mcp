@@ -26,6 +26,7 @@ import {
 } from "./compile.js";
 import { resolveApiUrl } from "./config.js";
 import { SESSION_GUIDE } from "./session.js";
+import { latchProject } from "./team.js";
 import {
   ensureGitignore,
   loadEnv,
@@ -528,6 +529,9 @@ export function registerTools(server: McpServer): void {
 
       const isHeadPull = mode === "dev" && version == null && !updateSlug;
       const shouldApply = applyLocal ?? isHeadPull;
+      // Only the applying form is identity-bearing: it advances that worktree's
+      // rail. A read-only pull stays available for inspecting a teammate.
+      if (shouldApply) latchProject(dir, "spawn_latest applyLocal");
 
       const { status, json } = await api(
         env,
@@ -652,6 +656,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ projectDir, dryRun, force }) => {
       const dir = resolveProjectDir(projectDir);
+      latchProject(dir, "spawn_push");
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
 
@@ -825,6 +830,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ projectDir }) => {
       const dir = resolveProjectDir(projectDir);
+      latchProject(dir, "spawn_revoke");
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY");
       const { status, json } = await api(env, "POST", "/api/agent/v1/token/revoke");

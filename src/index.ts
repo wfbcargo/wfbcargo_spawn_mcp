@@ -5,6 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { closePlay } from "./browser.js";
 import { registerPlayTools } from "./play-tools.js";
 import { SESSION_GUIDE } from "./session.js";
+import { initTeamMode } from "./team.js";
+import { registerTeamTools } from "./team-tools.js";
 import { registerTools } from "./tools.js";
 
 function packageVersion(): string {
@@ -37,8 +39,13 @@ server.registerPrompt(
   })
 );
 
+// Decided once, before any tool can run: the team tools only exist when a team
+// does, so the solo tool list stays exactly as it was.
+const team = initTeamMode();
+
 registerTools(server);
 registerPlayTools(server);
+if (team.enabled) registerTeamTools(server);
 
 /** Hard cap on graceful shutdown — a wedged browser must not block exit. */
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -46,7 +53,9 @@ const SHUTDOWN_GRACE_MS = 5_000;
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("spawn-mcp: ready on stdio (api + play browser)");
+  console.error(
+    `spawn-mcp: ready on stdio (api + play browser) | team mode ${team.enabled ? "ON" : "off"}: ${team.reason}`
+  );
 
   let shuttingDown = false;
   const shutdown = async (reason: string) => {

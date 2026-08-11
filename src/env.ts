@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { resolveApiUrl } from "./config.js";
+import { isTeamMode, PROJECT_DIR_PINNED_MESSAGE } from "./team.js";
 
 /** Where a credential was resolved from, so precedence surprises are debuggable. */
 export type CredentialSource = "project" | "process" | null;
@@ -14,9 +15,19 @@ export type SpawnEnv = {
 
 const ENV_KEYS = ["SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID"] as const;
 
-/** Resolve the game project directory (where game.json / .env live). */
+/**
+ * Resolve the game project directory (where game.json / .env live).
+ *
+ * In team mode a globally configured SPAWN_PROJECT_DIR is refused rather than
+ * used, because it silently collapses every worktree onto one identity. An
+ * explicit argument always wins and is never refused: it is unambiguous about
+ * which agent the call is for.
+ */
 export function resolveProjectDir(explicit?: string): string {
-  return resolve(explicit || process.env.SPAWN_PROJECT_DIR || process.cwd());
+  if (explicit) return resolve(explicit);
+  const configured = (process.env.SPAWN_PROJECT_DIR || "").trim();
+  if (configured && isTeamMode()) throw new Error(PROJECT_DIR_PINNED_MESSAGE(configured));
+  return resolve(configured || process.cwd());
 }
 
 function parseDotEnv(raw: string): Record<string, string> {
