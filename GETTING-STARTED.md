@@ -123,6 +123,8 @@ Then start building:
 
 Expect it to take a minute or two: it writes the code, pushes it, opens its own browser window, screenshots the result, and adjusts if it doesn't look right. The browser window that pops up is your assistant looking at your game. You can watch, or ignore it.
 
+> **Leave that window open.** It has to be a real visible window. Spawn needs a graphics card, and a hidden ("headless") browser can't render your game at all. If your assistant offers to run it hidden to save space, say no; it will only see an error page. Minimising it is fine.
+
 ## Things worth asking for
 
 | What you want | What to say |
@@ -132,7 +134,7 @@ Expect it to take a minute or two: it writes the code, pushes it, opens its own 
 | Fix something broken | *"The bridge is floating. Check the logs and fix it."* |
 | Understand the world | *"What objects are in the world right now?"* |
 | Roll back a bad session | *"Reset my project back to the last published version."* |
-| Work quietly | *"Run the game browser hidden from now on."* |
+| Play a round properly | *"Click through the menu and play one round like a real player."* |
 
 ## Publishing
 
@@ -159,6 +161,9 @@ Point them all at the same game, and start with two or three before scaling up. 
 | "Bootstrap failed" / "expired" | The `sbk_` key expired; they last about 5 minutes. Get a fresh one and retry immediately. |
 | "Executable doesn't exist" / no browser | You skipped `npm run setup`. Run it in the tool folder. |
 | Assistant can't see the game | Ask it to *"reload the game browser."* |
+| Assistant describes an error page, or "One graphics fix away" | It opened the browser hidden. Ask it to *"open the game browser visibly (headed)."* |
+| Assistant says it can't find your menu buttons | Expected. It can't read your game's UI as code, only as a picture. Ask it to *"screenshot and click the button by its position."* |
+| Assistant says the world is unreachable / 502 | Nobody is in the game. Ask it to *"open the play browser first, then check the world."* |
 | "version_conflict" | Someone else changed the game. Say *"pull the latest, merge, and push again."* |
 | Game looks unchanged after a push | Ask for a screenshot. You may be looking at your own stale browser tab. Refresh it. |
 | Nothing works and you're stuck | Ask: *"Run spawn_status and tell me what's wrong."* It reports the connection, versions, and any unresolved conflicts in plain terms. |

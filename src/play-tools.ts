@@ -116,14 +116,16 @@ export function registerPlayTools(server: McpServer): void {
     "spawn_play_open",
     {
       description:
-        "Open the live Spawn play URL in a local Chromium (Playwright). Headed by default so you can watch. Use this as the agent's eyes/hands on the game — Spawn is WebGPU/canvas, so screenshot + input beat accessibility trees. Resolves play URL from the variant if omitted.",
+        "Open the live Spawn play URL in a local Chromium (Playwright). Headed by default so you can watch. Use this as the agent's eyes/hands on the game — Spawn is WebGPU/canvas, so screenshot + input beat accessibility trees. Resolves play URL from the variant if omitted. Keep it HEADED: headless Chromium has no WebGPU adapter, so Spawn refuses to start and every screenshot shows its 'One graphics fix away' gate instead of the game. The result reports webgpu:'ok'|'unavailable'.",
       inputSchema: {
         projectDir: projectDirSchema,
         playUrl: z.string().optional().describe("Absolute play URL; otherwise resolved from the API"),
         headed: z
           .boolean()
           .optional()
-          .describe("Show a real browser window (default true). Set false for headless."),
+          .describe(
+            "Show a real browser window (default true). false = headless, which CANNOT render Spawn (no WebGPU adapter) — only useful for reaching a non-Spawn page."
+          ),
         width: z.number().optional(),
         height: z.number().optional(),
         waitMs: z
@@ -150,6 +152,17 @@ export function registerPlayTools(server: McpServer): void {
         });
         if (!takeShot) {
           return text({ ...opened, source: resolved.source });
+        }
+        // A missing WebGPU adapter means the screenshot shows Spawn's graphics
+        // gate, not the game. Say so loudly rather than returning a confusing
+        // picture of an error page.
+        if (opened.webgpu === "unavailable") {
+          const shot = await screenshot({ format, quality });
+          return imageResult(shot, {
+            ...opened,
+            source: resolved.source,
+            note: "The screenshot below is Spawn's graphics gate, NOT your game.",
+          });
         }
         const shot = await screenshot({ format, quality });
         return imageResult(shot, {
@@ -209,7 +222,7 @@ export function registerPlayTools(server: McpServer): void {
     "spawn_play_input",
     {
       description:
-        "Send keyboard/mouse actions to the play session (WASD, jump, click UI, etc.). Clicks the canvas center ONCE per session to give it keyboard focus — later batches send only the actions you list, so no stray clicks fire your weapon or dismiss UI. After acting, call spawn_play_screenshot to see the result.",
+        "Send keyboard/mouse actions to the play session (WASD, jump, click UI, etc.). Clicks the canvas center ONCE per session to give it keyboard focus — later batches send only the actions you list, so no stray clicks fire your weapon or dismiss UI. This is also the ONLY way to click your game's UI (ui.js renders into a cross-origin iframe that spawn_play_eval cannot reach): screenshot first, read the button's position off the image, then click those coordinates. After acting, call spawn_play_screenshot to see the result.",
       inputSchema: {
         actions: z
           .array(inputActionSchema)
@@ -293,11 +306,13 @@ export function registerPlayTools(server: McpServer): void {
     "spawn_play_eval",
     {
       description:
-        "Evaluate JavaScript in the play page (browser context — not the Spawn room api). Prefer spawn_exec for live world queries. Use this for DOM/WebGPU diagnostics.",
+        "Evaluate JavaScript in the play page's TOP frame (browser context — not the Spawn room api). Use it for page-level diagnostics: WebGPU support, network state, document title. It CANNOT see or click the game's UI: Spawn renders the UI in a cross-origin sandboxed iframe, so document.querySelector finds none of your ui.js buttons and reaching into the frame throws. Click game UI with spawn_play_input coordinates instead, and read live world state with spawn_exec.",
       inputSchema: {
         script: z
           .string()
-          .describe("JS expression/function body evaluated in the page"),
+          .describe(
+            "A JS EXPRESSION evaluated in the page's top frame (not a function body — a bare `return` is a syntax error). Wrap statements in an IIFE: (() => { ...; return x; })()"
+          ),
       },
     },
     async ({ script }) => {

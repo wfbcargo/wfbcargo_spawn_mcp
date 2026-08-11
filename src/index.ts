@@ -46,10 +46,10 @@ Setup:
 Build loop (show, don't tell):
 1. Edit project files.
 2. spawn_validate → spawn_push. Every push rebuilds live room state (~1s).
-3. Open your own play client: spawn_play_open (headed Chromium). This is YOUR eyes — Spawn is WebGPU/canvas; screenshots beat descriptions.
+3. Open your own play client: spawn_play_open (headed Chromium). This is YOUR eyes — Spawn is WebGPU/canvas; screenshots beat descriptions. Keep it HEADED: headless has no WebGPU adapter, so Spawn shows a graphics gate instead of your game (the result reports webgpu: "unavailable" when that happens).
 4. After each meaningful push: spawn_play_screenshot (or reload if the client didn't reshape). Look at the image. If wrong, fix and push again — don't claim done from API success alone.
-5. Exercise gameplay with spawn_play_input (WASD, Space, clicks), then screenshot again.
-6. Debug: spawn_logs + spawn_play_console for script/page errors; spawn_exec for live world queries.
+5. Exercise gameplay with spawn_play_input (WASD, Space, clicks), then screenshot again. Your game's UI (ui.js) renders in a cross-origin iframe that spawn_play_eval CANNOT read or click — to press a button, screenshot, read its position off the image, and click those coordinates with spawn_play_input.
+6. Debug: spawn_logs + spawn_play_console for script/page errors; spawn_exec for live world queries. spawn_exec needs a live room (open a play client first) and cannot run api.sql at all — verify persistence through replicated state, not by querying the database.
 7. On version_conflict (409): spawn_latest (head), merge .theirs receipts, push again.
 8. After meaningful pushes, spawn_savi with what changed.
 9. spawn_play_close when finished.

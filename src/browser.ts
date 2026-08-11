@@ -95,7 +95,7 @@ export function openPlay(opts: {
   width?: number;
   height?: number;
   waitMs?: number;
-}): Promise<{ playUrl: string; headed: boolean; title: string; url: string }> {
+}): Promise<OpenResult> {
   return withSession(() => openPlayUnlocked(opts));
 }
 
@@ -105,7 +105,7 @@ async function openPlayUnlocked(opts: {
   width?: number;
   height?: number;
   waitMs?: number;
-}): Promise<{ playUrl: string; headed: boolean; title: string; url: string }> {
+}): Promise<OpenResult> {
   const headed = opts.headed ?? process.env.SPAWN_PLAY_HEADED !== "0";
   const width = opts.width ?? 1280;
   const height = opts.height ?? 720;
@@ -160,12 +160,54 @@ async function openPlayUnlocked(opts: {
   await page.goto(opts.playUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
   if (waitMs > 0) await sleep(waitMs);
 
+  const gpu = await probeWebGpu(page);
   return {
     playUrl: opts.playUrl,
     headed,
     title: await page.title(),
     url: page.url(),
+    webgpu: gpu.adapter ? "ok" : "unavailable",
+    ...(gpu.adapter ? {} : { webgpuDetail: gpu.detail, warning: HEADLESS_WEBGPU_WARNING }),
   };
+}
+
+export type OpenResult = {
+  playUrl: string;
+  headed: boolean;
+  title: string;
+  url: string;
+  webgpu: "ok" | "unavailable";
+  webgpuDetail?: string;
+  warning?: string;
+};
+
+export const HEADLESS_WEBGPU_WARNING =
+  "This page has no WebGPU adapter, so Spawn will show its 'One graphics fix away' gate instead of the game. " +
+  "Headless Chromium cannot render Spawn — there is no GPU and software fallbacks do not provide an adapter. " +
+  "Re-open with headed:true (the default) and make sure SPAWN_PLAY_HEADED is not set to 0.";
+
+/**
+ * Ask the page whether a WebGPU adapter is actually obtainable. `navigator.gpu`
+ * exists in headless Chromium but requestAdapter() resolves null, which is what
+ * trips Spawn's graphics gate — so probing the API alone would report a false OK.
+ */
+async function probeWebGpu(page: Page): Promise<{ adapter: boolean; detail: string }> {
+  try {
+    return await page.evaluate(async () => {
+      if (typeof navigator === "undefined" || !("gpu" in navigator)) {
+        return { adapter: false, detail: "navigator.gpu missing" };
+      }
+      try {
+        const a = await (navigator as any).gpu.requestAdapter();
+        return a ? { adapter: true, detail: "adapter granted" } : { adapter: false, detail: "requestAdapter() returned null" };
+      } catch (e: any) {
+        return { adapter: false, detail: `requestAdapter() threw: ${e?.message ?? e}` };
+      }
+    });
+  } catch (e: any) {
+    // Never let a diagnostic break opening the browser.
+    return { adapter: true, detail: `probe skipped: ${e?.message ?? e}` };
+  }
 }
 
 export async function ensurePage(): Promise<Page> {

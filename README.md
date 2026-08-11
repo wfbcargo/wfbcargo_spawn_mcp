@@ -37,7 +37,7 @@ See `mcp.example.json`. On Windows use forward slashes (`C:/Users/you/...`).
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `SPAWN_PROJECT_DIR` | process cwd | Game project holding `game.json` / `.env` |
-| `SPAWN_PLAY_HEADED` | `1` | `0` forces headless play sessions |
+| `SPAWN_PLAY_HEADED` | `1` | `0` forces headless (see the warning below); games will not render |
 | `SPAWN_HTTP_TIMEOUT_MS` | `60000` | Abort API calls that hang |
 | `SPAWN_API_URL` | pinned in `src/config.ts` | Dev override only; must be `https` (or localhost) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright default | Override where Chromium is installed |
@@ -53,6 +53,14 @@ edit → spawn_validate → spawn_push
 ```
 
 Spawn is WebGPU/canvas, so accessibility snapshots won't see the world. Screenshots are the ground truth.
+
+### Play browser rules
+
+Three things that cost real debugging time if you learn them the hard way:
+
+- **Headed only.** Headless Chromium gets no WebGPU adapter (`requestAdapter()` returns `null`, SwiftShader flags included), so Spawn refuses to start and every screenshot is its *"One graphics fix away"* gate rather than your game. `spawn_play_open` probes this and reports `webgpu: "ok" | "unavailable"` with an explanation. Leave `SPAWN_PLAY_HEADED` unset, and only use `headed: false` to reach a non-Spawn page.
+- **`spawn_play_eval` cannot touch your game UI.** `ui.js` renders into a *cross-origin sandboxed iframe*, so `document.querySelector` in the top frame finds none of your buttons and reaching into the frame throws. Click UI with `spawn_play_input` coordinates: screenshot, read the button's position off the image, click it. (`spawn_play_eval` also takes an expression, not a function body: wrap statements in an IIFE.)
+- **`spawn_exec` needs a live room and cannot read your database.** Rooms exist only while a player is connected, so call `spawn_play_open` first or you get a 5xx (the error says so). The endpoint is read-only server-side and refuses `api.sql` outright, even `SELECT`, so there is no way to query the game's SQLite from this server. Verify persistence through replicated state instead.
 
 ## First connection
 
@@ -90,19 +98,19 @@ spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 | `spawn_docs` / `spawn_skill` | Guide, tome API, domain skills |
 | `spawn_latest` | Pull head / published / version / updateSlug (+ script sync) |
 | `spawn_validate` / `spawn_push` | Compile + schema check / live push |
-| `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect |
+| `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect (needs a live room; no SQL) |
 | `spawn_savi` | Background context for Savi |
 | `spawn_revoke` / `spawn_status` | Disconnect / local + head/published health |
 
 ### Play browser
 | Tool | Purpose |
 |------|---------|
-| `spawn_play_open` | Launch Chromium on the play URL (screenshot by default) |
+| `spawn_play_open` | Launch Chromium on the play URL (headed; screenshot by default) |
 | `spawn_play_screenshot` | See the world after a push (jpeg by default; `format:"png"` for flat art) |
-| `spawn_play_input` | Keys/mouse (WASD, click, drag, type) |
+| `spawn_play_input` | Keys/mouse (WASD, click, drag, type); the only way to click game UI |
 | `spawn_play_reload` | Hard reload if the client didn't reshape |
 | `spawn_play_console` | Page console / pageerror |
-| `spawn_play_eval` | Page JS (prefer `spawn_exec` for room state) |
+| `spawn_play_eval` | Top-frame page JS only; cannot see or click game UI |
 | `spawn_play_status` / `spawn_play_close` | Session health / teardown |
 
 Also: **`spawn_session`** prompt with the full loop (including multi-agent).

@@ -51,6 +51,18 @@ const projectDirSchema = z
     "Absolute path to the Spawn game project (game.json / .env). Defaults to SPAWN_PROJECT_DIR or the MCP process cwd."
   );
 
+/**
+ * The live-room endpoints answer 502 when no room is running. That reads as a
+ * server outage unless you know a room only exists while someone is connected.
+ */
+function execHint(result: ApiResult): string {
+  const detail = apiError(result);
+  if (result.status === 502 || result.status === 503) {
+    return `${detail}\n\nA 5xx here usually means NO LIVE ROOM: rooms only exist while a player is connected. Open one with spawn_play_open (or have the creator open the play URL) and retry.`;
+  }
+  return detail;
+}
+
 export function registerTools(server: McpServer): void {
   server.registerTool(
     "spawn_bootstrap",
@@ -552,7 +564,7 @@ export function registerTools(server: McpServer): void {
     "spawn_exec",
     {
       description:
-        "Run a read-only JavaScript snippet against the live room (e.g. query objects). Pushing is the only write path.",
+        "Run a read-only JavaScript snippet against the live room (e.g. query objects, read an object's state). Pushing is the only write path. Needs a LIVE ROOM — rooms exist only while a player is connected, so open spawn_play_open first or you get a 5xx. `api.sql` is NOT available here at all (the endpoint is read-only server-side and refuses SQL outright, even SELECT) — there is no way to read the game database through this server.",
       inputSchema: {
         script: z
           .string()
@@ -566,9 +578,15 @@ export function registerTools(server: McpServer): void {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const { status, json } = await api(env, "POST", variantPath(env, "/agent/exec"), { script });
-      if (status !== 200) return err(`exec failed (${status}): ${JSON.stringify(json)}`);
-      return text(json);
+      const result = await api(env, "POST", variantPath(env, "/agent/exec"), { script });
+      if (result.status !== 200) return err(`exec failed (${result.status}): ${execHint(result)}`);
+      // The endpoint answers 200 with { ok: false, error } when the SCRIPT
+      // failed. Reporting that as success makes a broken script look like a
+      // working one.
+      if (result.json && result.json.ok === false) {
+        return err(`exec script failed: ${result.json.error ?? JSON.stringify(result.json)}`);
+      }
+      return text(result.json);
     }
   );
 
@@ -582,9 +600,9 @@ export function registerTools(server: McpServer): void {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const { status, json } = await api(env, "GET", variantPath(env, "/agent/logs"));
-      if (status !== 200) return err(`logs failed (${status}): ${JSON.stringify(json)}`);
-      return text(json);
+      const result = await api(env, "GET", variantPath(env, "/agent/logs"));
+      if (result.status !== 200) return err(`logs failed (${result.status}): ${execHint(result)}`);
+      return text(result.json);
     }
   );
 
@@ -598,9 +616,9 @@ export function registerTools(server: McpServer): void {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const { status, json } = await api(env, "GET", variantPath(env, "/agent/rooms"));
-      if (status !== 200) return err(`rooms failed (${status}): ${JSON.stringify(json)}`);
-      return text(json);
+      const result = await api(env, "GET", variantPath(env, "/agent/rooms"));
+      if (result.status !== 200) return err(`rooms failed (${result.status}): ${execHint(result)}`);
+      return text(result.json);
     }
   );
 
