@@ -2,10 +2,14 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join, resolve } from "node:path";
 import { resolveApiUrl } from "./config.js";
 
+/** Where a credential was resolved from, so precedence surprises are debuggable. */
+export type CredentialSource = "project" | "process" | null;
+
 export type SpawnEnv = {
   apiUrl: string;
   agentKey: string;
   variantId: string;
+  sources: { agentKey: CredentialSource; variantId: CredentialSource };
 };
 
 const ENV_KEYS = ["SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID"] as const;
@@ -25,7 +29,16 @@ function parseDotEnv(raw: string): Record<string, string> {
   return out;
 }
 
-/** Load Spawn credentials from process env, then project `.env`. */
+/**
+ * Load Spawn credentials from the project `.env`, then process env.
+ *
+ * The project directory owns the identity: that is what lets one checkout per
+ * agent (a git worktree each, `.env` being untracked) act as separate Spawn
+ * connections against the same game. Process env is the fallback for a project
+ * that carries no credentials of its own, not an override — otherwise a key in
+ * the MCP config would silently pin every project to one connection, and
+ * `spawn_bootstrap` would appear to do nothing.
+ */
 export function loadEnv(projectDir: string): SpawnEnv {
   const filePath = join(projectDir, ".env");
   let file: Record<string, string> = {};
@@ -37,13 +50,25 @@ export function loadEnv(projectDir: string): SpawnEnv {
     }
   }
 
-  const pick = (key: (typeof ENV_KEYS)[number]) => (process.env[key] || file[key] || "").trim();
+  const pick = (
+    key: (typeof ENV_KEYS)[number]
+  ): { value: string; source: CredentialSource } => {
+    const fromProject = (file[key] || "").trim();
+    if (fromProject) return { value: fromProject, source: "project" };
+    const fromProcess = (process.env[key] || "").trim();
+    if (fromProcess) return { value: fromProcess, source: "process" };
+    return { value: "", source: null };
+  };
+
+  const agentKey = pick("SPAWN_AGENT_KEY");
+  const variantId = pick("SPAWN_VARIANT_ID");
 
   return {
     // Pinned in config.ts — never sourced from the project .env. See the note there.
     apiUrl: resolveApiUrl(),
-    agentKey: pick("SPAWN_AGENT_KEY"),
-    variantId: pick("SPAWN_VARIANT_ID"),
+    agentKey: agentKey.value,
+    variantId: variantId.value,
+    sources: { agentKey: agentKey.source, variantId: variantId.source },
   };
 }
 

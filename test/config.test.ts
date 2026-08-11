@@ -63,10 +63,30 @@ describe("loadEnv", () => {
     assert.equal(loadEnv(dir).apiUrl, SPAWN_API_URL);
   });
 
-  it("lets the process env win over the file for credentials", () => {
+  // The project directory owns the identity: one worktree per agent, each with
+  // its own untracked .env, is how several agents share one game. A key in the
+  // MCP config must not pin every project to one connection.
+  it("lets the project .env win over the process env for credentials", () => {
     const dir = tmpProject("SPAWN_AGENT_KEY=from_file\n");
     process.env.SPAWN_AGENT_KEY = "from_process";
-    assert.equal(loadEnv(dir).agentKey, "from_process");
+    const env = loadEnv(dir);
+    assert.equal(env.agentKey, "from_file");
+    assert.equal(env.sources.agentKey, "project");
+  });
+
+  it("falls back to the process env when the project carries no credential", () => {
+    const dir = tmpProject("SPAWN_VARIANT_ID=var_1\n");
+    process.env.SPAWN_AGENT_KEY = "from_process";
+    const env = loadEnv(dir);
+    assert.equal(env.agentKey, "from_process");
+    assert.equal(env.sources.agentKey, "process");
+    assert.equal(env.sources.variantId, "project");
+  });
+
+  it("reports a missing credential as having no source", () => {
+    const env = loadEnv(tmpProject());
+    assert.equal(env.agentKey, "");
+    assert.equal(env.sources.agentKey, null);
   });
 
   it("tolerates quotes, CRLF, and a missing file", () => {
