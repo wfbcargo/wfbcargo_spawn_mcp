@@ -2,6 +2,8 @@
 
 Local [Model Context Protocol](https://modelcontextprotocol.io) server for the [Spawn](https://www.spawn.co) Games agent API — plus a **Playwright Chromium play client** so the LLM can open the live game, screenshot it, drive input, and debug without asking you to look.
 
+> **New here?** Read **[GETTING-STARTED.md](GETTING-STARTED.md)** instead — a plain-language walkthrough from install to your first game, no MCP experience assumed. The rest of this file is the technical reference.
+
 ## Install
 
 ```bash
