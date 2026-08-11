@@ -1,8 +1,8 @@
 # Team mode (design sketch)
 
-> Status: **phases 0 and 1 landed.** The three fixes, the ledger, `spawn_team_init`,
-> `spawn_team_status`, and the session latch are built. Claims, the push lock, and
-> `spawn_team_add` (phases 2 and 3) are still proposals. Decisions are recorded at the bottom.
+> Status: **phases 0, 1 and 2 landed.** The three fixes, the ledger, the roster and claim
+> tools, the session latch, the push lock, and attribution are built. Only `spawn_team_add` and
+> `spawn_team_brief` (phase 3) remain proposals. Decisions are recorded at the bottom.
 
 ## The idea in one line
 
@@ -140,8 +140,8 @@ does, and it keeps this server free of subprocesses.
 .git/spawn-team/
   roster.json     label, worktree path, token mask, spawn username, variant, added, lastSeen   [built]
   lock/           mutex directory, stolen after a 15s stale window                             [built]
-  claims.json     key path or script glob → owner label, claimed at, note                      [phase 2]
-  pushes.jsonl    append-only {ts, label, version, paths} so a 409 can name a teammate          [phase 2]
+  claims.json     key path or script glob → owner label, claimed at, note                      [built]
+  pushes.jsonl    append-only {ts, label, version, paths} so a 409 can name a teammate          [built]
 ```
 
 The roster is keyed on the project directory, so re-running `spawn_team_init` with a new label
@@ -160,7 +160,7 @@ ledger degrades to solo behaviour rather than blocking work.
 |---|---|---|
 | `spawn_team_init` | Create the ledger if absent, register this worktree under a label | built |
 | `spawn_team_status` | Roster, each agent's base version, head version, who is behind, who is blocked by receipts | built |
-| `spawn_team_claim` / `spawn_team_release` | Claim `game.json` key paths and script globs for a label | phase 2 |
+| `spawn_team_claim` / `spawn_team_release` | Claim `game.json` key paths and script globs for a label | built |
 | `spawn_team_add` | Emit the `git worktree add` command, then bootstrap and init the new agent | phase 3 |
 | `spawn_team_brief` | Emit a ready-to-paste opening prompt for one builder: worktree path, its claims, head version, the rules | phase 3 |
 
@@ -174,14 +174,15 @@ It hands back text; the LLM decides what to do with it.
 
 ### Changed in team mode
 
-Built: `spawn_push`, `spawn_latest applyLocal`, `spawn_revoke`, and `spawn_play_open` enforce
-the latch. Still phase 2:
-
-- **`spawn_push`** takes the push lock, compares head against the local rail, pulls first when
-  the pull is clean, pushes, appends to `pushes.jsonl`, releases. This is what turns a 409 storm
-  into a short wait. It also warns when the compiled spec touches paths another label claims.
-- **`spawn_latest`** names the teammate whose push you just pulled instead of "someone else".
-- **`spawn_status`** gains a `team` block: your label, your claims, who else is active.
+- **`spawn_push`** enforces the latch, takes the push lock, rebases onto head when the rebase is
+  clean, pushes, appends to `pushes.jsonl`, releases. Serialised, "behind head" can only mean a
+  teammate landed a push since the last sync, so the rebase turns what would have been a 409 into
+  a no-op. A dirty rebase stops the push instead, with the local work intact and the colliding
+  paths named. It also warns when the compiled spec touches paths another label claims, diffed
+  against the base rails so only this agent's own edits are checked.
+- **`spawn_latest`** names the teammate whose push it just pulled instead of "someone else".
+- **`spawn_status`** gained a `team` block: your label, your claims, what others hold.
+- **`spawn_latest applyLocal`, `spawn_revoke`, `spawn_play_open`** enforce the latch.
 
 ### Roles
 
@@ -239,7 +240,7 @@ fix.
 |---|---|---|
 | 0 **(done)** | Identity precedence, `game.json` three-way merge and receipts | everyone, solo included |
 | 1 **(done)** | Ledger, `spawn_team_init`, `spawn_team_status`, the session latch | first real team run |
-| 2 | Claims, push lock, teammate attribution on 409 | teams larger than two |
+| 2 **(done)** | Claims, push lock, teammate attribution on 409 | teams larger than two |
 | 3 | `spawn_team_add`, `spawn_team_brief` | ergonomics |
 
 Phases 0 and 1 together make host-driven multi-agent work with no new concepts: a worktree per

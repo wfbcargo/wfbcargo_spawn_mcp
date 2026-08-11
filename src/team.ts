@@ -9,6 +9,7 @@
  * quietly acting as two different agents.
  */
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -21,11 +22,20 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const ROSTER_FILE = "roster.json";
+export const CLAIMS_FILE = "claims.json";
+export const PUSHES_FILE = "pushes.jsonl";
 const LOCK_DIR = "lock";
 /** A holder that dies mid-write must not wedge the ledger forever. */
 const LOCK_STALE_MS = 15_000;
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 25;
+
+/**
+ * The push lock is held across a network round trip, so it needs a stale window
+ * longer than the HTTP timeout (60s by default) or a slow push would have its
+ * lock stolen mid-flight, and a wait long enough for a few agents to queue.
+ */
+export const PUSH_LOCK = { name: "push.lock", staleMs: 90_000, waitMs: 120_000 };
 
 export type TeamAgent = {
   label: string;
@@ -203,10 +213,16 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * every platform we run on; a lock older than the stale window is assumed
  * abandoned and taken, because a crashed agent must not block the rest of a team.
  */
-export async function withLedgerLock<T>(ledgerDir: string, fn: () => T | Promise<T>): Promise<T> {
-  const lockPath = join(ledgerDir, LOCK_DIR);
+export async function withLedgerLock<T>(
+  ledgerDir: string,
+  fn: () => T | Promise<T>,
+  opts: { name?: string; staleMs?: number; waitMs?: number } = {}
+): Promise<T> {
+  const lockPath = join(ledgerDir, opts.name ?? LOCK_DIR);
+  const staleMs = opts.staleMs ?? LOCK_STALE_MS;
+  const waitMs = opts.waitMs ?? LOCK_WAIT_MS;
   mkdirSync(ledgerDir, { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + waitMs;
 
   for (;;) {
     try {
@@ -220,7 +236,7 @@ export async function withLedgerLock<T>(ledgerDir: string, fn: () => T | Promise
       } catch {
         continue; // released between the failed mkdir and the stat
       }
-      if (age > LOCK_STALE_MS) {
+      if (age > staleMs) {
         rmSync(lockPath, { recursive: true, force: true });
         continue;
       }
@@ -304,6 +320,180 @@ export function findLabelOwner(
       (a) => a.label.toLowerCase() === label.toLowerCase() && resolve(a.projectDir) !== dir
     ) ?? null
   );
+}
+
+/** The agent registered for a worktree, if any. */
+export function agentFor(roster: Roster, projectDir: string): TeamAgent | null {
+  const dir = resolve(projectDir);
+  return roster.agents.find((a) => resolve(a.projectDir) === dir) ?? null;
+}
+
+export type ClaimKind = "script" | "spec";
+
+export type Claim = {
+  label: string;
+  pattern: string;
+  kind: ClaimKind;
+  claimedAt: string;
+  note?: string;
+};
+
+export type Claims = { version: 1; claims: Claim[] };
+
+/**
+ * What a pattern claims.
+ *
+ * Only `scripts/**` lives in files; everything else in the spec is claimed by
+ * dotted key path in `game.json`, which is where `spawn_init` puts the whole
+ * spec and therefore where the work actually happens. A path-looking pattern
+ * outside `scripts/` would silently never match, so it is rejected instead.
+ */
+export function classifyPattern(pattern: string): { kind: ClaimKind } | { error: string } {
+  const p = pattern.trim();
+  if (!p) return { error: "Empty pattern." };
+  if (p.startsWith("scripts/")) return { kind: "script" };
+  if (p === "scripts" || p === "scripts/") {
+    return { error: 'Claim "scripts/**" to take every script, not "scripts".' };
+  }
+  if (p.includes("/")) {
+    return {
+      error: `"${p}" looks like a file path but is not under scripts/. Only scripts/** are files. Everything else (world/*.json overlays included) is compiled into the spec and is claimed by its dotted game.json key path, e.g. "entities.player".`,
+    };
+  }
+  if (p.includes("*")) {
+    return { error: `Wildcards are only supported in script globs, not in key paths like "${p}".` };
+  }
+  return { kind: "spec" };
+}
+
+const GLOB_SPECIALS = /[.+^${}()|[\]\\?]/g;
+
+/** `**` crosses directory separators, a single `*` stops at one. */
+function globToRegExp(pattern: string): RegExp {
+  const body = pattern
+    .split("**")
+    .map((part) => part.replace(GLOB_SPECIALS, "\\$&").replace(/\*/g, "[^/]*"))
+    .join(".*");
+  return new RegExp(`^${body}$`);
+}
+
+/** A wildcard-free script pattern claims that file and, if it is a directory, everything under it. */
+export function matchesScriptClaim(pattern: string, filePath: string): boolean {
+  if (!pattern.includes("*")) {
+    const base = pattern.replace(/\/+$/, "");
+    return filePath === base || filePath.startsWith(`${base}/`);
+  }
+  return globToRegExp(pattern).test(filePath);
+}
+
+/**
+ * Key paths overlap in both directions: a claim on `entities.player` covers a
+ * change to `entities.player.hp`, and a change to `entities` (the whole subtree
+ * replaced) collides with a claim on anything inside it.
+ */
+export function matchesSpecClaim(pattern: string, keyPath: string): boolean {
+  return (
+    keyPath === pattern ||
+    keyPath.startsWith(`${pattern}.`) ||
+    pattern.startsWith(`${keyPath}.`)
+  );
+}
+
+export function findClaimOwner(claims: Claims, kind: ClaimKind, path: string): Claim | null {
+  return (
+    claims.claims.find(
+      (c) =>
+        c.kind === kind &&
+        (kind === "script"
+          ? matchesScriptClaim(c.pattern, path)
+          : matchesSpecClaim(c.pattern, path))
+    ) ?? null
+  );
+}
+
+export function readClaims(ledgerDir: string): Claims {
+  try {
+    const parsed = JSON.parse(readFileSync(join(ledgerDir, CLAIMS_FILE), "utf8"));
+    if (parsed && Array.isArray(parsed.claims)) {
+      return {
+        version: 1,
+        claims: parsed.claims.filter((c: any) => c?.label && c?.pattern && c?.kind),
+      };
+    }
+  } catch {
+    /* absent or corrupt — no claims is a safe reading, since they are advisory */
+  }
+  return { version: 1, claims: [] };
+}
+
+export function writeClaims(ledgerDir: string, claims: Claims): void {
+  writeJsonAtomic(join(ledgerDir, CLAIMS_FILE), claims);
+}
+
+/** Re-claiming a pattern moves it to the new owner rather than duplicating it. */
+export function addClaim(claims: Claims, claim: Claim): Claims {
+  return {
+    version: 1,
+    claims: [...claims.claims.filter((c) => c.pattern !== claim.pattern), claim].sort((a, b) =>
+      a.pattern.localeCompare(b.pattern)
+    ),
+  };
+}
+
+export function removeClaims(
+  claims: Claims,
+  label: string,
+  patterns?: string[]
+): { claims: Claims; removed: Claim[] } {
+  const wanted = patterns?.length ? new Set(patterns) : null;
+  const removed = claims.claims.filter(
+    (c) => c.label === label && (!wanted || wanted.has(c.pattern))
+  );
+  const kept = claims.claims.filter((c) => !removed.includes(c));
+  return { claims: { version: 1, claims: kept }, removed };
+}
+
+export type PushRecord = {
+  ts: string;
+  label: string;
+  version: number;
+  specPaths: string[];
+  scripts: string[];
+};
+
+/** Append-only, so concurrent pushes cannot lose each other's history. */
+export function appendPush(ledgerDir: string, record: PushRecord): void {
+  mkdirSync(ledgerDir, { recursive: true });
+  appendFileSync(join(ledgerDir, PUSHES_FILE), `${JSON.stringify(record)}\n`);
+}
+
+export function readPushes(ledgerDir: string, limit = 20): PushRecord[] {
+  let raw: string;
+  try {
+    raw = readFileSync(join(ledgerDir, PUSHES_FILE), "utf8");
+  } catch {
+    return [];
+  }
+  const records: PushRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.label && typeof parsed.version === "number") records.push(parsed);
+    } catch {
+      /* skip a torn line rather than losing the whole log */
+    }
+  }
+  return limit > 0 ? records.slice(-limit) : records;
+}
+
+/** Who pushed a given version, so a 409 can name a teammate instead of "someone". */
+export function findPushByVersion(ledgerDir: string, version: number): PushRecord | null {
+  const all = readPushes(ledgerDir, 0);
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i].version === version) return all[i];
+  }
+  return null;
 }
 
 /** Ledger files present, for status output and diagnostics. */

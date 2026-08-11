@@ -95,16 +95,21 @@ Opt-in bookkeeping for the above. Set `SPAWN_TEAM=1` in the first session's MCP 
 | Tool | Purpose |
 |------|---------|
 | `spawn_team_init` | Create the ledger if absent, register this worktree under a label |
-| `spawn_team_status` | Every agent, how far behind head each rail is, who has unresolved receipts, head vs published |
+| `spawn_team_status` | Every agent, how far behind head each rail is, who has unresolved receipts, open claims, recent pushes |
+| `spawn_team_claim` / `spawn_team_release` | Take or give up ownership of `game.json` key paths and `scripts/` globs |
 
-Two behaviours change while it is on:
+Four behaviours change while it is on:
 
 - **One session drives one agent.** `spawn_push`, `spawn_latest applyLocal`, `spawn_revoke`, and `spawn_play_open` latch to the first project directory they see and refuse a second one. Identity, the version rail, and the single Chromium session all belong to one directory, so driving two from one session pushes one agent's work onto the other's rail and points its screenshots at the wrong client. Read-only tools stay free to inspect any worktree, and `spawn_bootstrap` / `spawn_init` stay free so a new worktree can be provisioned from anywhere.
 - **A globally configured `SPAWN_PROJECT_DIR` is refused**, with an explanation, rather than used. It would resolve every session to one `.env`, so every agent would push as the same connection while appearing to work in its own worktree. An explicit `projectDir` argument is never refused.
+- **Pushes serialise and rebase.** `spawn_push` takes a ledger-wide lock, and from inside it "behind head" can only mean a teammate landed a push since your last sync, so it pulls first. A clean rebase costs you nothing and the 409 never happens. A rebase that collides stops the push with your work intact and the conflicts named, because that needs a decision no server should make. `force: true` skips the rebase, since it is a deliberate whole-replace.
+- **Claims warn on push.** Changes are diffed against the base rails, so what gets checked is exactly your own edits, and touching another agent's claim is reported alongside the successful push. Advisory by design: a stale claim must never become a hostage situation.
 
-Solo, none of this exists: the tool list stays at 27 and nothing latches.
+Claim `game.json` key paths (`entities.player`, `world.terrain`) and script globs (`scripts/hud/**`). Everything except `scripts/**` is claimed by key path, because `spawn_init` puts the whole spec in `game.json`; a `world/foo.json`-style pattern is rejected rather than silently never matching.
 
-The fuller design, including what is deliberately not built, is in [TEAM-MODE.md](TEAM-MODE.md). Claims, the push lock, and `spawn_team_add` are still proposals there.
+Solo, none of this exists: the tool list stays at 27, nothing latches, and pushes take no lock.
+
+The fuller design, including what is deliberately not built, is in [TEAM-MODE.md](TEAM-MODE.md). `spawn_team_add` and `spawn_team_brief` are still proposals there.
 
 ### What a pull merges
 
