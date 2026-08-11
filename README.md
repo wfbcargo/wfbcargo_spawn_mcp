@@ -116,6 +116,8 @@ npm run build       # emit dist/
 
 Tests cover the parts that silently corrupt a project when they regress: the spec compiler, the script path guards, and the three-way pull/merge in `syncPulledScripts`. CI runs them on Node 20/22 across Linux and Windows.
 
+> The `test` script lists test files explicitly rather than globbing — `node --test` only expands globs itself on Node 21+, and Windows shells don't expand them either. **Add new `test/*.test.ts` files to that script or they won't run.**
+
 ## Security
 
 - `SPAWN_AGENT_KEY` lives in the game project's `.env` only.
