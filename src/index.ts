@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { closePlay } from "./browser.js";
 import { registerPlayTools } from "./play-tools.js";
+import { SESSION_GUIDE } from "./session.js";
 import { registerTools } from "./tools.js";
 
 function packageVersion(): string {
@@ -30,39 +31,7 @@ server.registerPrompt(
     messages: [
       {
         role: "user" as const,
-        content: {
-          type: "text" as const,
-          text: `You are building a Spawn game via the spawn MCP tools.
-
-Credentials live in the game project's .env (SPAWN_API_URL, SPAWN_AGENT_KEY, SPAWN_VARIANT_ID). Never print the full agent key.
-
-Setup:
-1. If no token: spawn_bootstrap with the creator's one-time sbk_ key (expires ~5m, single use). Use a distinct name per agent (e.g. terrain-agent).
-2. spawn_me — tell the creator who you're connected as.
-3. spawn_create_game or spawn_list_games + spawn_set_variant.
-4. spawn_init — scaffolds game.json, world/, scripts/, .spawn/ docs.
-5. Read .spawn/guide.md and .spawn/tome-api.md before building. spawn_skill <id> before new domains.
-
-Build loop (show, don't tell):
-1. Edit project files.
-2. spawn_validate → spawn_push. Every push rebuilds live room state (~1s).
-3. Open your own play client: spawn_play_open (headed Chromium). This is YOUR eyes — Spawn is WebGPU/canvas; screenshots beat descriptions. Keep it HEADED: headless has no WebGPU adapter, so Spawn shows a graphics gate instead of your game (the result reports webgpu: "unavailable" when that happens).
-4. After each meaningful push: spawn_play_screenshot (or reload if the client didn't reshape). Look at the image. If wrong, fix and push again — don't claim done from API success alone.
-5. Exercise gameplay with spawn_play_input (WASD, Space, clicks), then screenshot again. Your game's UI (ui.js) renders in a cross-origin iframe that spawn_play_eval CANNOT read or click — to press a button, screenshot, read its position off the image, and click those coordinates with spawn_play_input.
-6. Debug: spawn_logs + spawn_play_console for script/page errors; spawn_exec for live world queries. spawn_exec needs a live room (open a play client first) and cannot run api.sql at all — verify persistence through replicated state, not by querying the database.
-7. On version_conflict (409): spawn_latest (head), merge .theirs receipts, push again.
-8. After meaningful pushes, spawn_savi with what changed.
-9. spawn_play_close when finished.
-
-Multi-agent (same creator account — no crew setup):
-- Each agent needs its own bootstrap key (settings → build with your own agent) and its own local projectDir / worktree. Never share one SPAWN_PROJECT_DIR — agents will thrash game.json, scripts/, and .spawn/base-version.
-- Point every agent at the same SPAWN_VARIANT_ID. Concurrent pushes are supported (optimistic concurrency); 409s are expected, not bugs.
-- Ask the creator to publish in the Spawn UI before unleashing the team — published (mode=live) stays stable for players while agents push to dev head. Agents cannot publish via API; use spawn_latest mode=live (read) or spawn_status to confirm a published baseline exists.
-- Start small (2–3 agents). Partition work by script/area so conflicts stay rare. Prefer spawn_latest after gaps; restore with mode=live applyLocal:true only when intentionally resetting.
-- Coordinate with Savi via spawn_savi; treat other agents' pushes like Savi/creator edits on the version rail.
-
-Pass projectDir when the game project is not SPAWN_PROJECT_DIR / cwd.`,
-        },
+        content: { type: "text" as const, text: SESSION_GUIDE },
       },
     ],
   })

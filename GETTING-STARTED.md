@@ -93,7 +93,9 @@ claude mcp add spawn --env SPAWN_PROJECT_DIR=C:/Users/you/my-first-game -- node 
 
 **Restart your assistant** after making the change. It won't notice otherwise.
 
-To check it worked, ask your assistant: *"What spawn tools do you have?"* It should list around 25, all starting with `spawn_`.
+To check it worked, ask your assistant: *"What spawn tools do you have?"* It should list around 27, all starting with `spawn_`.
+
+If it looks connected but seems unsure what to do, say *"Run spawn_getting_started."* That hands it the whole workflow and tells it which step you're on.
 
 ## Step 4: Connect to your Spawn account
 
@@ -135,6 +137,11 @@ Expect it to take a minute or two: it writes the code, pushes it, opens its own 
 | Understand the world | *"What objects are in the world right now?"* |
 | Roll back a bad session | *"Reset my project back to the last published version."* |
 | Play a round properly | *"Click through the menu and play one round like a real player."* |
+| Better-looking results | *"Load the art and UI skills first, then redo the look."* |
+
+On that last one: Spawn ships about 60 "skills", short guides on how the engine actually does terrain, combat, cameras, HUDs, textures, lighting. An assistant that skips them makes things that work but look plain. Telling it to load the skills for the job first is the cheapest quality upgrade there is.
+
+One limit worth knowing: your assistant **cannot generate images or 3D models**. That's Savi's job in the Spawn studio. Your assistant can draw textures in code, write shader-like materials, and build things out of shapes, but when you want a proper conjured model or a generated texture, ask Savi for it in the studio and then tell your assistant to use it.
 
 ## Publishing
 

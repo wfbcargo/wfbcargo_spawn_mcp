@@ -94,8 +94,10 @@ spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 | `spawn_bootstrap` | Trade `sbk_…` → durable token in `.env` |
 | `spawn_me` | Whoami |
 | `spawn_list_games` / `spawn_create_game` / `spawn_set_variant` | Pick a game |
+| `spawn_getting_started` | Whole workflow + what this project already has (no credentials needed) |
 | `spawn_init` | Scaffold project + docs |
-| `spawn_docs` / `spawn_skill` | Guide, tome API, domain skills |
+| `spawn_docs` | Guide, tome API, skills index |
+| `spawn_skills` / `spawn_skill` | Browse the skill menu / load a set of skills by id |
 | `spawn_latest` | Pull head / published / version / updateSlug (+ script sync) |
 | `spawn_validate` / `spawn_push` | Compile + schema check / live push |
 | `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect (needs a live room; no SQL) |
@@ -113,7 +115,26 @@ spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 | `spawn_play_eval` | Top-frame page JS only; cannot see or click game UI |
 | `spawn_play_status` / `spawn_play_close` | Session health / teardown |
 
-Also: **`spawn_session`** prompt with the full loop (including multi-agent).
+Also: **`spawn_session`** prompt with the full loop (including multi-agent). `spawn_getting_started` returns the same text as a tool call, because most clients never surface prompts to the model.
+
+## Art and UI
+
+The most common quality gap in an agent build is visual, and it has two causes worth knowing.
+
+**The engine's craft lives in skills, not in the API reference.** There are ~60 of them, and the visual cluster (`drawn-art`, `game-ui`, `looks`, `custom-materials`, `fx`, `3d-sprites`, `world-composition`, `match-a-reference`) is where textures, HUDs, colour grade, and shader surfaces are actually explained. An agent that skips them writes untextured primitives and default DOM.
+
+Rather than rely on a prompt telling the model to go and read them, the endpoints are shaped to pull skills in: `spawn_skill` takes `ids: [...]` so the natural call carries the whole set (mechanic *and* look), `spawn_push` and `spawn_play_screenshot` say in their own descriptions that a plain-looking result is a missing skill rather than a missing feature, and a wrong id answers with the full menu, so guessing is cheaper than looking up.
+
+**This MCP has no asset-generation lane.** Conjuring a 3D model from a prompt or generating a texture belongs to Savi in the studio; there is no agent API for it. An agent's art levers are code-drawn textures (`drawn-art`), scripted materials, composed primitives, and `cdn/` assets that already exist. When a build genuinely needs a generated asset, ask Savi in the studio for it and let the agent wire it in.
+
+```
+spawn_skill ids=["game-ui","drawn-art","looks"]   # load a set; a bad id returns the menu
+spawn_skills                                      # all 60, id + name + description
+spawn_skills search="ui"                          # filter over id, name, description
+spawn_skills detail="brief"                       # id + name only (the full index is ~9k tokens)
+```
+
+The index is read from `.spawn/skills.json` when `spawn_init` / `spawn_docs` has already saved it, so browsing costs no network call; `refresh: true` re-fetches.
 
 ## Development
 
@@ -125,6 +146,8 @@ npm run build       # emit dist/
 ```
 
 Tests cover the parts that silently corrupt a project when they regress: the spec compiler, the script path guards, and the three-way pull/merge in `syncPulledScripts`. CI runs them on Node 20/22 across Linux and Windows.
+
+Release notes live in [CHANGELOG.md](CHANGELOG.md). Versions are tagged `v<major>.<minor>.<patch>`.
 
 > The `test` script lists test files explicitly rather than globbing, because `node --test` only expands globs itself on Node 21+, and Windows shells don't expand them either. **Add new `test/*.test.ts` files to that script or they won't run.**
 

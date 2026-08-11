@@ -22,6 +22,7 @@ import {
   writeBaseVersion,
 } from "./compile.js";
 import { resolveApiUrl } from "./config.js";
+import { SESSION_GUIDE } from "./session.js";
 import {
   ensureGitignore,
   loadEnv,
@@ -63,7 +64,55 @@ function execHint(result: ApiResult): string {
   return detail;
 }
 
+type SkillEntry = { id?: string; name?: string; description?: string };
+
+/** Read the skills index `spawn_init` / `spawn_docs` already saved, if usable. */
+function readSkillsCache(file: string): SkillEntry[] | null {
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return Array.isArray(parsed) && parsed.length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function registerTools(server: McpServer): void {
+  server.registerTool(
+    "spawn_getting_started",
+    {
+      description:
+        "START HERE before any other spawn tool. The whole workflow in one call: setup order, the art/UI skills to load BEFORE building anything visual, the push → screenshot → fix loop, and the multi-agent rules. Also reports what this project already has (token, variant, game.json, docs) so you know which step you're on. Needs no credentials.",
+      inputSchema: { projectDir: projectDirSchema },
+    },
+    async ({ projectDir }) => {
+      const dir = resolveProjectDir(projectDir);
+      const env = loadEnv(dir);
+      const state = {
+        agentKey: Boolean(env.agentKey),
+        variantId: Boolean(env.variantId),
+        gameJson: existsSync(join(dir, "game.json")),
+        docs: existsSync(join(dir, ".spawn", "guide.md")),
+        skillsIndex: existsSync(join(dir, ".spawn", "skills.json")),
+      };
+      const next = !state.agentKey
+        ? "spawn_bootstrap — ask the creator for a fresh sbk_ key (Spawn gear → Build with a coding agent)."
+        : !state.variantId
+          ? "spawn_create_game, or spawn_list_games + spawn_set_variant."
+          : !state.gameJson || !state.docs
+            ? "spawn_init — scaffold the project and pull docs into .spawn/."
+            : "Read .spawn/guide.md + .spawn/tome-api.md, then spawn_skills to pick the skills this build needs.";
+
+      const checklist = Object.entries(state)
+        .map(([key, ok]) => `  ${ok ? "✓" : "✗"} ${key}`)
+        .join("\n");
+
+      return text(
+        `${SESSION_GUIDE}\n\n---\n\nThis project (${dir}):\n${checklist}\n\nNext step: ${next}`
+      );
+    }
+  );
+
   server.registerTool(
     "spawn_bootstrap",
     {
@@ -269,7 +318,7 @@ export function registerTools(server: McpServer): void {
         playUrl: `${env.apiUrl}${docs.json.playUrl ?? ""}`,
         docsWarnings: docs.json.errors ?? [],
         notes,
-        next: "Read .spawn/guide.md and .spawn/tome-api.md before building. Use spawn_skill before new domains.",
+        next: 'Read .spawn/guide.md and .spawn/tome-api.md, then load the craft for what you are about to build: spawn_skill ids: ["…"] — every domain the work touches, look skills included (a scene is world-composition + looks, a HUD is game-ui + drawn-art). spawn_skills lists all of them.',
       });
     }
   );
@@ -277,7 +326,8 @@ export function registerTools(server: McpServer): void {
   server.registerTool(
     "spawn_docs",
     {
-      description: "Fetch engine guide, tome API reference, and skills index. Optionally save under .spawn/.",
+      description:
+        "Fetch engine guide, tome API reference, and skills index. Optionally save under .spawn/. For just the skill menu with descriptions, spawn_skills is cheaper.",
       inputSchema: {
         projectDir: projectDirSchema,
         save: z.boolean().default(true).describe("Write guide.md, tome-api.md, skills.json under .spawn/"),
@@ -311,26 +361,120 @@ export function registerTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "spawn_skills",
+    {
+      description:
+        "The menu of skill ids to pass to spawn_skill, each with what it covers. Browse it when planning a build so the spawn_skill call can carry every domain the work touches — mechanic and look together. Reads .spawn/skills.json when present (no network, no credentials) and falls back to the API. If you already know roughly what you need, skip this and pass ids straight to spawn_skill; a wrong id answers with this list anyway.",
+      inputSchema: {
+        projectDir: projectDirSchema,
+        search: z
+          .string()
+          .optional()
+          .describe('Case-insensitive filter over id, name, and description (e.g. "ui", "camera", "terrain")'),
+        detail: z
+          .enum(["full", "brief"])
+          .default("full")
+          .describe("'full' includes each skill's description (the whole index is ~9k tokens); 'brief' is id + name only"),
+        refresh: z
+          .boolean()
+          .default(false)
+          .describe("Re-fetch the index from the API and rewrite .spawn/skills.json (needs credentials)"),
+      },
+    },
+    async ({ projectDir, search, detail, refresh }) => {
+      const dir = resolveProjectDir(projectDir);
+      const cachePath = join(dir, ".spawn", "skills.json");
+
+      let skills = refresh ? null : readSkillsCache(cachePath);
+      let source = "cache";
+      if (!skills) {
+        const env = loadEnv(dir);
+        requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
+        const result = await api(env, "GET", variantPath(env, "/agent/docs"));
+        if (result.status !== 200) return err(`skills failed (${result.status}): ${apiError(result)}`);
+        skills = (Array.isArray(result.json?.skills) ? result.json.skills : []) as SkillEntry[];
+        source = "api";
+        // Cache it so later calls (and spawn_skill lookups) work offline.
+        try {
+          saveFile(cachePath, JSON.stringify(skills, null, 2));
+        } catch {
+          /* unwritable project dir — the listing itself still works */
+        }
+      }
+
+      const needle = search?.trim().toLowerCase();
+      const matched = needle
+        ? skills.filter((s) =>
+            `${s.id ?? ""} ${s.name ?? ""} ${s.description ?? ""}`.toLowerCase().includes(needle)
+          )
+        : skills;
+
+      return text({
+        count: matched.length,
+        total: skills.length,
+        source,
+        ...(needle ? { search } : {}),
+        skills: matched.map((s) =>
+          detail === "brief" ? { id: s.id, name: s.name } : { id: s.id, name: s.name, description: s.description }
+        ),
+        next:
+          "spawn_skill <id> for the full markdown of any skill listed here. Load the art/UI ones before writing visual code — a HUD or a material written without them lands as default DOM and untextured primitives.",
+      });
+    }
+  );
+
+  server.registerTool(
     "spawn_skill",
     {
       description:
-        "Fetch one skill's markdown (terrain, structures, combat, cameras, …). Call before entering a new domain.",
+        "Load the craft for what you are about to build — pass EVERY skill the work touches, not one. This is where the engine's real technique lives (how a HUD is actually built, how a material is written, how terrain is sculpted); the API reference only lists fields, so code written without the skills works but looks and behaves like a default. Anything visual should carry the look skills alongside the mechanic: a HUD is game-ui + drawn-art, a glowing surface is custom-materials + looks, a scene is world-composition + looks. Guessing an id is fine and cheap — a miss answers with the real menu.",
       inputSchema: {
-        id: z.string().describe("Skill id from .spawn/skills.json"),
+        ids: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Skill ids to load together, e.g. ["game-ui","drawn-art","looks"]. Pass every domain the next chunk of work touches — mechanic AND look. These are long documents (~7k tokens each), so 2-4 ids for the work actually in front of you, not the whole menu. Visual: drawn-art, game-ui, looks, custom-materials, fx, slash-vfx, 3d-sprites, world-composition, match-a-reference. Motion/camera: platformer-movement, vehicles, camera-first-person, camera-third-person, camera-isometric, camera-top-down. Systems: scripted-systems, data-and-saves, npc, enemy-ai, combat, projectiles, leaderboard, interactive-objects. Terrain/build: heightmap-terrain, voxel-terrain, structures, custom-geometry. spawn_skills is the authoritative live list.'
+          ),
+        id: z.string().optional().describe("Single skill id — prefer ids: [...] and load the whole set at once"),
         projectDir: projectDirSchema,
       },
     },
-    async ({ id, projectDir }) => {
+    async ({ ids, id, projectDir }) => {
       const dir = resolveProjectDir(projectDir);
+      const wanted = [...new Set([...(ids ?? []), ...(id ? [id] : [])].map((s) => s.trim()).filter(Boolean))];
+      const menu = () => {
+        const cached = readSkillsCache(join(dir, ".spawn", "skills.json"));
+        return cached
+          ? `\n\nAvailable ids:\n${cached.map((s) => `  ${s.id} — ${s.name}`).join("\n")}`
+          : "\n\nCall spawn_skills for the list of ids.";
+      };
+      if (!wanted.length) return err(`Pass ids: [...] — the skills this work needs.${menu()}`);
+
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const { status, json } = await api(
-        env,
-        "GET",
-        variantPath(env, `/agent/skills/${encodeURIComponent(id)}`)
+      const loaded = await Promise.all(
+        wanted.map(async (skillId) => {
+          const result = await api(env, "GET", variantPath(env, `/agent/skills/${encodeURIComponent(skillId)}`));
+          if (result.status !== 200) {
+            return { id: skillId, error: `${result.status}: ${apiError(result)}` };
+          }
+          const body = result.json?.content ?? result.json;
+          return { id: skillId, content: typeof body === "string" ? body : JSON.stringify(body, null, 2) };
+        })
       );
-      if (status !== 200) return err(`skill failed (${status}): ${json?.error}`);
-      return text(json.content ?? json);
+
+      const ok = loaded.filter((s) => s.content !== undefined);
+      const failed = loaded.filter((s) => s.error !== undefined);
+      // A wrong id must not cost a round trip to find the right one.
+      if (!ok.length) {
+        return err(`No skill loaded.\n${failed.map((f) => `  ${f.id}: ${f.error}`).join("\n")}${menu()}`);
+      }
+
+      const body = ok.map((s) => `=== ${s.id} ===\n\n${s.content}`).join("\n\n");
+      const problems = failed.length
+        ? `\n\n=== not loaded ===\n${failed.map((f) => `  ${f.id}: ${f.error}`).join("\n")}${menu()}`
+        : "";
+      return text(body + problems);
     }
   );
 
@@ -438,7 +582,7 @@ export function registerTools(server: McpServer): void {
     "spawn_validate",
     {
       description:
-        "Compile the project (game.json + world/*.json + scripts/**) and run authoritative server-side schema validation.",
+        "Compile the project (game.json + world/*.json + scripts/**) and run authoritative server-side schema validation. Schema-valid is not the same as good: it says nothing about how the result looks or feels, which comes from the skills you loaded (spawn_skill) before writing the code.",
       inputSchema: { projectDir: projectDirSchema },
     },
     async ({ projectDir }) => {
@@ -473,7 +617,7 @@ export function registerTools(server: McpServer): void {
     "spawn_push",
     {
       description:
-        "Compile + push the project live (~1s in the creator's browser). Every push rebuilds the live room. On 409 version_conflict, call spawn_latest then merge .theirs receipts and push again.",
+        "Compile + push the project live (~1s in the creator's browser). Every push rebuilds the live room. On 409 version_conflict, call spawn_latest then merge .theirs receipts and push again. A successful push proves the spec parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: drawn-art, custom-materials, looks, game-ui).",
       inputSchema: {
         projectDir: projectDirSchema,
         dryRun: z.boolean().default(false),

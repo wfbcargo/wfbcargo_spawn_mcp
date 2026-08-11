@@ -186,7 +186,7 @@ export function registerPlayTools(server: McpServer): void {
     "spawn_play_screenshot",
     {
       description:
-        "Screenshot the open play session. Primary visual check after spawn_push — look at the image before calling the change done. Optionally save under the project.",
+        "Screenshot the open play session. Primary visual check after spawn_push — look at the image before calling the change done. Judge it as a player would: if it reads as grey boxes, flat untextured shapes, or default browser UI, that is a missing skill rather than a missing feature — load the relevant craft (spawn_skill ids: drawn-art, custom-materials, looks, game-ui, world-composition) and rewrite that code, since none of it is discoverable from the API reference. Optionally save under the project.",
       inputSchema: {
         projectDir: projectDirSchema,
         save: z
