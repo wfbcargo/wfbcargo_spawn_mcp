@@ -1,0 +1,83 @@
+name: Release
+
+# Cuts a GitHub Release from a version tag, with the notes taken straight from
+# CHANGELOG.md so the release page and the file can never drift apart.
+#
+# To release: bump package.json (npm version --no-git-tag-version <v>), add the
+# CHANGELOG section, commit, then `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
+#
+# workflow_dispatch runs everything except the publish step, so the extraction
+# and the gates can be verified without inventing a throwaway tag.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # A tag that cannot build must never become a release, so the same gates
+      # CI runs on main run again here against the tagged tree.
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Resolve version
+        id: version
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            # A tag that disagrees with package.json produces a release whose
+            # artifacts claim a different version than its title.
+            if [ "$tag" != "$pkg" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json ${pkg}"
+              exit 1
+            fi
+            echo "version=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          # index() rather than a regex: the section header contains [ and ],
+          # and getting those escaped correctly through YAML, sh, and awk's
+          # string literals is a silent-failure trap (it matches nothing).
+          awk -v hdr="## [${{ steps.version.outputs.version }}]" '
+            index($0, hdr) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          # Trim leading/trailing blank lines so the release body starts on text.
+          sed -i -e '/./,$!d' release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [${{ steps.version.outputs.version }}]' section"
+            exit 1
+          fi
+          echo "--- release notes ---"
+          cat release-notes.md
+
+      - name: Create the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag
