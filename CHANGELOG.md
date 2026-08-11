@@ -6,7 +6,14 @@ Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- **A pull no longer silently discards your `game.json` edits.** `spawn_latest` used to overwrite the file wholesale, with no receipt and no mention in the sync summary, even though `spawn_init` puts the entire spec in it. Script sources were the only content with a merge story. There is now a `.spawn/base-game.json` rail and a three-way merge by key path: keys only you moved stay, keys only upstream moved fast-forward, and a key both sides moved keeps **your** value, lands in the reported `conflicts` list as a dotted path, and writes a `game.json.theirs` receipt that blocks `spawn_push` until you resolve it. Same contract the script receipts already had.
+
 - **The project `.env` now wins over the process env** for `SPAWN_AGENT_KEY` and `SPAWN_VARIANT_ID`; process env remains the fallback for a project that carries none. A key in the MCP config used to override every project, which made `spawn_bootstrap` look like it had done nothing and pinned every checkout to one connection. `spawn_status` reports where each credential came from.
+
+### Notes
+
+- Existing projects have no `.spawn/base-game.json`, so the first pull after upgrading keeps the old whole-replace behaviour, copies the previous `game.json` to `.spawn/replaced-game.json` when it would drop anything, and establishes the rail. Pulls merge from then on. `spawn_status` reports `hasSpecRail`.
+- `world/*.json` overlays are still not reconciled: they re-apply over pulled content at compile time. Disjoint overlays compose fine, overlapping ones do not. In practice `spawn_init` puts the whole spec in `game.json` and leaves `world/` empty, so the key-path merge covers the common case.
 
 ## [1.3.0] - 2026-08-11
 

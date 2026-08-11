@@ -75,16 +75,32 @@ Three things that cost real debugging time if you learn them the hard way:
 Same creator account needs **no crew setup**. Each agent gets its own key (settings → build with your own agent) and can push the same game concurrently, the same model Savi's background builders use.
 
 1. **Publish in the Spawn UI** before unleashing agents. Published (`mode=live`) stays stable for players while agents mutate dev head. There is no agent publish API; agents only *read* live via `spawn_latest` / `spawn_status`.
-2. **One project dir (or worktree) per agent.** A shared `SPAWN_PROJECT_DIR` will thrash `game.json`, scripts, and `.spawn/base-version`. Same `SPAWN_VARIANT_ID` for everyone.
+2. **One project dir (or worktree) per agent.** A shared `SPAWN_PROJECT_DIR` will thrash `game.json`, scripts, and `.spawn/base-version`. Same `SPAWN_VARIANT_ID` for everyone. Credentials resolve from the project's own `.env` first, so a git worktree each (`.env` and `.spawn/` are untracked) is what makes them separate connections. A key in the MCP config env is only a fallback for projects that carry none.
 3. Start with **2 to 3 agents**, partition script/area ownership, treat **409 `version_conflict`** as normal: `spawn_latest` → merge `.theirs` → push.
 4. Label bootstraps (`terrain-agent`, …) and call **`spawn_savi`** after meaningful pushes.
 
 ```
-spawn_status                 # head vs published, local base, .theirs
+spawn_status                 # head vs published, local base, .theirs, credential source
 spawn_latest                 # pull head (conflict recovery)
 spawn_latest mode=live       # inspect published (no local write)
 spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 ```
+
+### What a pull merges
+
+`spawn_latest` three-way merges against the last-seen upstream, tracked in `.spawn/base-scripts.json` and `.spawn/base-game.json`. Disjoint edits compose; only genuine overlap conflicts.
+
+| Content | Merged | Conflict lands as |
+|---------|--------|-------------------|
+| `scripts/**` | per file, by content | `<file>.theirs` beside it |
+| `game.json` | per key path | `game.json.theirs` (upstream's whole spec) |
+| `world/*.json` | **no** | nothing, see below |
+
+A conflict always keeps **your** value and names what collided (a path, or a dotted key like `entities.player.hp`). `spawn_push` refuses to run until every receipt is resolved and deleted.
+
+`world/*.json` overlays are the gap. They are deep-merged onto `game.json` at compile time and never reconciled, so a stale overlay re-applies over freshly pulled content and pushes back up. Disjoint overlays are fine; two agents writing the same key are not, and nothing will warn you.
+
+Projects created before this rail existed have no `.spawn/base-game.json`. Their first pull keeps the old whole-replace behaviour, copies the previous `game.json` to `.spawn/replaced-game.json` if that drops anything, and establishes the rail. `spawn_status` reports `hasSpecRail`.
 
 ## Tools
 
