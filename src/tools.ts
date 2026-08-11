@@ -11,11 +11,14 @@ import {
   type ApiResult,
 } from "./client.js";
 import {
+  changedScriptPaths,
+  changedSpecPaths,
   compile,
   formatIssues,
   listConflictReceipts,
   materializeScripts,
   readBaseGame,
+  readBaseScripts,
   readBaseVersion,
   specScriptsByFilePath,
   syncPulledScripts,
@@ -26,7 +29,20 @@ import {
 } from "./compile.js";
 import { resolveApiUrl } from "./config.js";
 import { SESSION_GUIDE } from "./session.js";
-import { latchProject } from "./team.js";
+import {
+  agentFor,
+  appendPush,
+  findClaimOwner,
+  findPushByVersion,
+  isTeamMode,
+  latchProject,
+  PUSH_LOCK,
+  readClaims,
+  readRoster,
+  resolveLedgerDir,
+  withLedgerLock,
+  type Claims,
+} from "./team.js";
 import {
   ensureGitignore,
   loadEnv,
@@ -35,6 +51,7 @@ import {
   resolveProjectDir,
   saveFile,
   upsertEnv,
+  type SpawnEnv,
 } from "./env.js";
 
 function text(data: unknown) {
@@ -66,6 +83,92 @@ function execHint(result: ApiResult): string {
     return `${detail}\n\nA 5xx here usually means NO LIVE ROOM: rooms only exist while a player is connected. Open one with spawn_play_open (or have the creator open the play URL) and retry.`;
   }
   return detail;
+}
+
+type TeamContext = { ledgerDir: string; label: string | null; claims: Claims };
+
+/** Team bookkeeping for one worktree, or null when there is no team. */
+function teamContext(dir: string): TeamContext | null {
+  if (!isTeamMode()) return null;
+  const ledgerDir = resolveLedgerDir(dir);
+  if (!ledgerDir) return null;
+  return {
+    ledgerDir,
+    label: agentFor(readRoster(ledgerDir), dir)?.label ?? null,
+    claims: readClaims(ledgerDir),
+  };
+}
+
+/**
+ * Advisory only, per the team-mode decision: a stale claim must never become a
+ * hostage situation. Deduped by claim, so one owned area does not produce forty
+ * near-identical lines.
+ */
+function claimWarnings(
+  team: TeamContext,
+  changed: { specPaths: string[]; scripts: string[] }
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const check = (kind: "spec" | "script", paths: string[]) => {
+    for (const path of paths) {
+      const owner = findClaimOwner(team.claims, kind, path);
+      if (!owner || owner.label === team.label) continue;
+      const key = `${owner.label}:${owner.pattern}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(
+        `${path} falls under "${owner.pattern}", claimed by ${owner.label}${owner.note ? ` (${owner.note})` : ""}`
+      );
+    }
+  };
+  check("spec", changed.specPaths);
+  check("script", changed.scripts);
+  return out;
+}
+
+/**
+ * Pull head before pushing, from inside the push lock.
+ *
+ * Serialised, "behind head" can only mean a teammate landed a push since our
+ * last sync, so rebasing here turns what would have been a 409 into a no-op.
+ * A dirty rebase stops the push instead: that needs a human decision, and
+ * pushing over it would discard the teammate's work.
+ */
+async function rebaseOntoHead(
+  dir: string,
+  env: SpawnEnv,
+  team: TeamContext
+): Promise<{ pulled?: { from: number; to: number; by: string | null } } | { error: string }> {
+  const base = readBaseVersion(dir);
+  if (base === null) return {}; // no rail: the existing error path explains it better
+
+  let head;
+  try {
+    head = await api(env, "GET", latestPath(env));
+  } catch {
+    return {}; // unreachable API: let the push itself report the failure
+  }
+  if (head.status !== 200 || typeof head.json?.version !== "number") return {};
+  if (head.json.version <= base) return {};
+
+  const scripts = syncPulledScripts(dir, head.json.gameSpec ?? {}, head.json.version);
+  const spec = syncPulledSpec(dir, head.json.gameSpec ?? {});
+  writeBaseVersion(dir, head.json.version);
+  const by = findPushByVersion(team.ledgerDir, head.json.version)?.label ?? null;
+
+  const conflicts = [
+    ...scripts.summary.conflicts.map((c) => c.path),
+    ...spec.conflicts.map((p) => `game.json:${p}`),
+  ];
+  if (conflicts.length) {
+    return {
+      error:
+        `Not pushed. ${by ? `${by} pushed` : "A teammate pushed"} v${head.json.version} while you were working, and rebasing onto it collided with your changes at: ${conflicts.join(", ")}.\n\n` +
+        "Your work is intact — every conflict kept YOUR value, and their side is in the .theirs receipt beside each file. Reconcile those, delete the receipts, then push again.",
+    };
+  }
+  return { pulled: { from: base, to: head.json.version, by } };
 }
 
 type SkillEntry = { id?: string; name?: string; description?: string };
@@ -567,6 +670,15 @@ export function registerTools(server: McpServer): void {
       const scriptConflicts = sync.summary.conflicts.length;
       const specConflicts = specSync.conflicts.length;
       const notes: string[] = [];
+
+      // Name the teammate whose work this is, rather than "someone else". Kept
+      // out of `notes` so it does not suppress the clean-pull message below.
+      const puller = teamContext(dir);
+      const pushedBy = puller ? findPushByVersion(puller.ledgerDir, json.version) : null;
+      const attribution =
+        pushedBy && pushedBy.label !== puller?.label
+          ? `v${json.version} is ${pushedBy.label}'s push${pushedBy.specPaths.length ? ` (touched ${pushedBy.specPaths.slice(0, 6).join(", ")})` : ""}.`
+          : null;
       if (specConflicts > 0) {
         notes.push(
           `game.json: ${specConflicts} key(s) changed both locally and upstream — kept YOURS at ${specSync.conflicts.join(", ")}, upstream's whole spec is in game.json.theirs. Reconcile those keys, delete the receipt, then push.`
@@ -600,7 +712,8 @@ export function registerTools(server: McpServer): void {
         sync: sync.summary,
         spec: specSync,
         hasConflicts: scriptConflicts + specConflicts > 0,
-        note: notes.join(" "),
+        ...(pushedBy ? { pushedBy: pushedBy.label } : {}),
+        note: [attribution, ...notes].filter(Boolean).join(" "),
       });
     }
   );
@@ -644,7 +757,7 @@ export function registerTools(server: McpServer): void {
     "spawn_push",
     {
       description:
-        "Compile + push the project live (~1s in the creator's browser). Every push rebuilds the live room. On 409 version_conflict, call spawn_latest then merge .theirs receipts and push again. A successful push proves the spec parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: drawn-art, custom-materials, looks, game-ui).",
+        "Compile + push the project live (~1s in the creator's browser). Every push rebuilds the live room. On 409 version_conflict, call spawn_latest then merge .theirs receipts and push again. In team mode pushes are serialised and rebased onto head first, so a 409 is rare and a clean teammate push costs you nothing; a rebase that collides stops the push with your work intact. A successful push proves the spec parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: drawn-art, custom-materials, looks, game-ui).",
       inputSchema: {
         projectDir: projectDirSchema,
         dryRun: z.boolean().default(false),
@@ -660,6 +773,29 @@ export function registerTools(server: McpServer): void {
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
 
+      // A dry run touches nothing shared, so it never queues behind a teammate.
+      const team = !dryRun ? teamContext(dir) : null;
+      const run = () => pushOnce({ dir, env, dryRun, force, team });
+      return team
+        ? withLedgerLock(team.ledgerDir, run, PUSH_LOCK)
+        : run();
+    }
+  );
+
+  /** The push itself, run under the team push lock when there is a team. */
+  async function pushOnce({
+    dir,
+    env,
+    dryRun,
+    force,
+    team,
+  }: {
+    dir: string;
+    env: ReturnType<typeof loadEnv>;
+    dryRun: boolean;
+    force: boolean;
+    team: TeamContext | null;
+  }) {
       const receipts = dryRun ? [] : listConflictReceipts(dir);
       if (receipts.length > 0 && !force) {
         return err(
@@ -670,6 +806,16 @@ export function registerTools(server: McpServer): void {
       }
       // With force, receipts are discarded — but only AFTER the push lands, so a
       // compile/validation failure can't destroy the upstream content they hold.
+
+      // Serialised behind the lock, so "behind head" here means a teammate landed
+      // a push since our last sync. Rebase now and the 409 never happens; bail if
+      // the rebase is not clean, because that needs a human decision either way.
+      let autoPulled: { from: number; to: number; by: string | null } | undefined;
+      if (team && !force) {
+        const rebased = await rebaseOntoHead(dir, env, team);
+        if ("error" in rebased) return err(rebased.error);
+        autoPulled = rebased.pulled;
+      }
 
       let spec: any;
       try {
@@ -685,6 +831,16 @@ export function registerTools(server: McpServer): void {
         );
       }
 
+      // Computed before the push, while the rails still describe the last sync
+      // point: these are exactly this agent's own uncommitted changes.
+      const changed = team
+        ? {
+            specPaths: changedSpecPaths(readBaseGame(dir) ?? {}, spec),
+            scripts: changedScriptPaths(readBaseScripts(dir), specScriptsByFilePath(spec)),
+          }
+        : null;
+      const trespasses = team && changed ? claimWarnings(team, changed) : [];
+
       const { status, json } = await api(env, "PUT", variantPath(env, "/game-specs"), {
         gameSpec: spec,
         ...(baseVersion !== null ? { baseVersion } : {}),
@@ -692,8 +848,14 @@ export function registerTools(server: McpServer): void {
       });
 
       if (status === 409) {
+        const current = json?.currentVersion;
+        const owner =
+          team && typeof current === "number" ? findPushByVersion(team.ledgerDir, current) : null;
         return err(
-          `version_conflict — someone else saved v${json?.currentVersion ?? "?"}. Upstream scripts: ${(json?.upstreamChangedScripts ?? []).join(", ") || "(none named)"}. Nothing written. Call spawn_latest, merge any .theirs, then push again.`
+          `version_conflict — ${owner ? `${owner.label} saved v${owner.version}` : `someone else saved v${current ?? "?"}`}. ` +
+            `Upstream scripts: ${(json?.upstreamChangedScripts ?? []).join(", ") || "(none named)"}. ` +
+            `${owner?.specPaths?.length ? `They touched: ${owner.specPaths.slice(0, 8).join(", ")}. ` : ""}` +
+            "Nothing written. Call spawn_latest, merge any .theirs, then push again."
         );
       }
       if (status === 400) {
@@ -719,6 +881,16 @@ export function registerTools(server: McpServer): void {
         for (const receipt of receipts) rmSync(receipt, { force: true });
       }
 
+      if (team && changed && !dryRun) {
+        appendPush(team.ledgerDir, {
+          ts: new Date().toISOString(),
+          label: team.label ?? "(unregistered)",
+          version: json.version,
+          specPaths: changed.specPaths.slice(0, 20),
+          scripts: changed.scripts.slice(0, 20),
+        });
+      }
+
       return text({
         ok: true,
         dryRun,
@@ -726,14 +898,22 @@ export function registerTools(server: McpServer): void {
         ...(receipts.length && !dryRun
           ? { discardedReceipts: receipts.map((r) => relative(dir, r)) }
           : {}),
+        ...(autoPulled
+          ? {
+              autoPulled: {
+                ...autoPulled,
+                note: `Rebased onto v${autoPulled.to}${autoPulled.by ? ` (${autoPulled.by}'s push)` : ""} before pushing, cleanly.`,
+              },
+            }
+          : {}),
+        ...(trespasses.length ? { claimWarnings: trespasses } : {}),
         playUrl: json.playUrl ? `${env.apiUrl}${json.playUrl}` : undefined,
         rooms: json.rooms,
         roomsError: json.roomsError,
         preExistingDebt: json.issues,
         issueCount: json.issueCount,
       });
-    }
-  );
+  }
 
   server.registerTool(
     "spawn_exec",
@@ -887,6 +1067,21 @@ export function registerTools(server: McpServer): void {
         hasTomeApi: existsSync(join(dir, ".spawn", "tome-api.md")),
         hasSkills: existsSync(join(dir, ".spawn", "skills.json")),
       };
+
+      const team = teamContext(dir);
+      if (team) {
+        status.team = {
+          label: team.label,
+          registered: team.label !== null,
+          yourClaims: team.claims.claims.filter((c) => c.label === team.label).map((c) => c.pattern),
+          claimedByOthers: team.claims.claims
+            .filter((c) => c.label !== team.label)
+            .map((c) => ({ pattern: c.pattern, label: c.label })),
+          ...(team.label === null
+            ? { note: "This worktree is not in the team ledger — run spawn_team_init. spawn_team_status shows the rest of the team." }
+            : {}),
+        };
+      }
 
       const canRemote =
         remote && Boolean(env.apiUrl && env.agentKey && env.variantId);

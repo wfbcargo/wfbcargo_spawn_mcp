@@ -6,13 +6,21 @@ import { api, apiError, latestPath } from "./client.js";
 import { listConflictReceipts, readBaseVersion } from "./compile.js";
 import { loadEnv, maskToken, resolveProjectDir } from "./env.js";
 import {
+  addClaim,
+  agentFor,
+  classifyPattern,
   findLabelOwner,
   latchedProject,
+  readClaims,
+  readPushes,
   readRoster,
+  removeClaims,
   resolveLedgerDir,
   upsertAgent,
   withLedgerLock,
+  writeClaims,
   writeRoster,
+  type Claim,
   type TeamAgent,
 } from "./team.js";
 
@@ -135,6 +143,124 @@ export function registerTeamTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "spawn_team_claim",
+    {
+      description:
+        "Claim the parts of the game this agent owns, so teammates are warned before they edit them. Two shapes: a dotted game.json key path ('entities.player', 'world.terrain') or a script glob under scripts/ ('scripts/terrain/**', 'scripts/hud.js'). Claims are ADVISORY — they warn on push, they never block one — and claiming early is what keeps pulls conflict-free. Re-claiming a pattern moves it to the new owner.",
+      inputSchema: {
+        patterns: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe(
+            "Key paths and/or script globs to claim. Everything except scripts/** is claimed by game.json key path, because that is where the whole spec lives."
+          ),
+        note: z.string().max(200).optional().describe("What you are building there"),
+        projectDir: projectDirSchema,
+      },
+    },
+    async ({ patterns, note, projectDir }) => {
+      const dir = resolveProjectDir(projectDir);
+      const located = ledgerOrError(dir);
+      if ("error" in located) return err(located.error);
+      const { ledgerDir } = located;
+
+      const me = agentFor(readRoster(ledgerDir), dir);
+      if (!me) {
+        return err(
+          `${dir} is not registered in the team ledger. Run spawn_team_init here first — a claim needs a label to belong to.`
+        );
+      }
+
+      const rejected: string[] = [];
+      const accepted: Claim[] = [];
+      const now = new Date().toISOString();
+      for (const raw of patterns) {
+        const pattern = raw.trim();
+        const kind = classifyPattern(pattern);
+        if ("error" in kind) {
+          rejected.push(`${pattern}: ${kind.error}`);
+          continue;
+        }
+        accepted.push({ label: me.label, pattern, kind: kind.kind, claimedAt: now, ...(note ? { note } : {}) });
+      }
+      if (!accepted.length) {
+        return err(`No pattern could be claimed.\n${rejected.map((r) => `  ${r}`).join("\n")}`);
+      }
+
+      const result = await withLedgerLock(ledgerDir, () => {
+        let claims = readClaims(ledgerDir);
+        const takenFrom: string[] = [];
+        for (const claim of accepted) {
+          const previous = claims.claims.find((c) => c.pattern === claim.pattern);
+          if (previous && previous.label !== me.label) {
+            takenFrom.push(`${claim.pattern} (was ${previous.label})`);
+          }
+          claims = addClaim(claims, claim);
+        }
+        writeClaims(ledgerDir, claims);
+        return { claims, takenFrom };
+      });
+
+      const mine = result.claims.claims.filter((c) => c.label === me.label);
+      const others = result.claims.claims.filter((c) => c.label !== me.label);
+      return text({
+        ok: true,
+        label: me.label,
+        claimed: accepted.map((c) => ({ pattern: c.pattern, kind: c.kind })),
+        ...(rejected.length ? { rejected } : {}),
+        ...(result.takenFrom.length ? { tookOver: result.takenFrom } : {}),
+        yourClaims: mine.map((c) => c.pattern),
+        claimedByOthers: others.map((c) => ({ pattern: c.pattern, label: c.label })),
+        note: "Advisory only. spawn_push warns when your changes touch someone else's claim; it never refuses.",
+      });
+    }
+  );
+
+  server.registerTool(
+    "spawn_team_release",
+    {
+      description:
+        "Release this agent's claims when it is done with an area, so a teammate can take it over without a stale warning. Omit patterns to release everything this agent holds.",
+      inputSchema: {
+        patterns: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Specific patterns to release. Omit to release all of this agent's claims."),
+        projectDir: projectDirSchema,
+      },
+    },
+    async ({ patterns, projectDir }) => {
+      const dir = resolveProjectDir(projectDir);
+      const located = ledgerOrError(dir);
+      if ("error" in located) return err(located.error);
+      const { ledgerDir } = located;
+
+      const me = agentFor(readRoster(ledgerDir), dir);
+      if (!me) return err(`${dir} is not registered in the team ledger. Run spawn_team_init here first.`);
+
+      const result = await withLedgerLock(ledgerDir, () => {
+        const { claims, removed } = removeClaims(
+          readClaims(ledgerDir),
+          me.label,
+          patterns?.map((p) => p.trim())
+        );
+        if (removed.length) writeClaims(ledgerDir, claims);
+        return { claims, removed };
+      });
+
+      return text({
+        ok: true,
+        label: me.label,
+        released: result.removed.map((c) => c.pattern),
+        remaining: result.claims.claims.filter((c) => c.label === me.label).map((c) => c.pattern),
+        ...(result.removed.length
+          ? {}
+          : { note: "Nothing matched — this agent held no such claim." }),
+      });
+    }
+  );
+
+  server.registerTool(
     "spawn_team_status",
     {
       description:
@@ -179,14 +305,28 @@ export function registerTeamTools(server: McpServer): void {
         };
       });
 
+      const claims = readClaims(ledgerDir);
+      const myLabel = agents.find((a) => a.isYou)?.label ?? null;
       const status: Record<string, unknown> = {
         ledgerDir,
         you: {
           projectDir: dir,
-          label: agents.find((a) => a.isYou)?.label ?? null,
+          label: myLabel,
           latchedTo: latchedProject(),
+          claims: claims.claims.filter((c) => c.label === myLabel).map((c) => c.pattern),
         },
         agents,
+        claims: claims.claims.map((c) => ({
+          pattern: c.pattern,
+          kind: c.kind,
+          label: c.label,
+          ...(c.note ? { note: c.note } : {}),
+        })),
+        unclaimed:
+          claims.claims.length === 0
+            ? "Nobody has claimed anything. spawn_team_claim early: it is what keeps two agents off the same key path."
+            : undefined,
+        recentPushes: readPushes(ledgerDir, 10).reverse(),
       };
 
       const env = loadEnv(dir);

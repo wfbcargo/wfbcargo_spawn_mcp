@@ -153,7 +153,7 @@ export function writeBaseVersion(projectDir: string, version: number): void {
   saveFile(join(projectDir, BASE_VERSION_FILE), `${version}\n`);
 }
 
-function readBaseScripts(projectDir: string): Record<string, string> | null {
+export function readBaseScripts(projectDir: string): Record<string, string> | null {
   try {
     const value = JSON.parse(readFileSync(join(projectDir, BASE_SCRIPTS_FILE), "utf8"));
     return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -253,6 +253,44 @@ export function mergeSpec(
   const conflicts: string[] = [];
   const merged = mergeSlot(base, mine, theirs, "", conflicts);
   return { merged: isPlainObject(merged) ? merged : {}, conflicts };
+}
+
+/**
+ * Dotted key paths where two spec bodies differ, at the narrowest level that
+ * actually moved. Used to tell an agent which of its own edits land on another
+ * agent's claim, so it compares the compiled spec against the base rail.
+ */
+export function changedSpecPaths(base: unknown, next: unknown): string[] {
+  const out: string[] = [];
+  collectChanges(withoutScripts(base), withoutScripts(next), "", out);
+  return out.sort();
+}
+
+function collectChanges(base: unknown, next: unknown, path: string, out: string[]): void {
+  if (sameSlot(base, next)) return;
+  if (isPlainObject(base) && isPlainObject(next)) {
+    for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+      const has = (o: Record<string, unknown>) => Object.prototype.hasOwnProperty.call(o, key);
+      collectChanges(
+        has(base) ? base[key] : MISSING,
+        has(next) ? next[key] : MISSING,
+        path ? `${path}.${key}` : key,
+        out
+      );
+    }
+    return;
+  }
+  out.push(path || "<root>");
+}
+
+/** Script file paths whose content differs between two script maps. */
+export function changedScriptPaths(
+  base: Record<string, string> | null,
+  next: Record<string, string>
+): string[] {
+  const from = base ?? {};
+  const paths = new Set([...Object.keys(from), ...Object.keys(next)]);
+  return [...paths].filter((p) => from[p] !== next[p]).sort();
 }
 
 export type SpecSyncSummary = {
