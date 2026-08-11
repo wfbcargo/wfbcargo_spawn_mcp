@@ -38,5 +38,6 @@ Multi-agent (same creator account — no crew setup):
 - Ask the creator to publish in the Spawn UI before unleashing the team — published (mode=live) stays stable for players while agents push to dev head. Agents cannot publish via API; use spawn_latest mode=live (read) or spawn_status to confirm a published baseline exists.
 - Start small (2–3 agents). Partition work by script/area so conflicts stay rare. Prefer spawn_latest after gaps; restore with mode=live applyLocal:true only when intentionally resetting.
 - Coordinate with Savi via spawn_savi; treat other agents' pushes like Savi/creator edits on the version rail.
+- If spawn_team_init / spawn_team_status exist, team mode is on: register this worktree once with spawn_team_init, then use spawn_team_status before pushing to see whether a teammate moved head under you. In that mode one session drives ONE agent — push, applying pulls, revoke, and spawn_play_open bind to the first project dir they touch and refuse a second, so work on another agent's worktree from a session started there.
 
 Pass projectDir when the game project is not SPAWN_PROJECT_DIR / cwd.`;

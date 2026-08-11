@@ -17,6 +17,7 @@ import {
   type Shot,
 } from "./browser.js";
 import { resolveProjectDir } from "./env.js";
+import { latchProject } from "./team.js";
 
 function text(data: unknown) {
   const body = typeof data === "string" ? data : JSON.stringify(data, null, 2);
@@ -142,6 +143,9 @@ export function registerPlayTools(server: McpServer): void {
     },
     async ({ projectDir, playUrl, headed, width, height, waitMs, screenshot: takeShot, format, quality }) => {
       try {
+        // Binds the one browser session to one agent. Every other play tool
+        // drives whatever this opened, so latching here covers all of them.
+        latchProject(resolveProjectDir(projectDir), "spawn_play_open");
         const resolved = await resolvePlayUrl(projectDir, playUrl);
         const opened = await openPlay({
           playUrl: resolved.playUrl,

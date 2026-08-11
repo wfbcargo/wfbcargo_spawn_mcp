@@ -20,7 +20,7 @@
     "setup": "playwright install chromium",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "node --import tsx --test test/compile.test.ts test/config.test.ts test/exec.test.ts test/skills.test.ts test/spec-merge.test.ts test/sync.test.ts",
+    "test": "node --import tsx --test test/compile.test.ts test/config.test.ts test/exec.test.ts test/skills.test.ts test/spec-merge.test.ts test/sync.test.ts test/team.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "check": "npm run typecheck && npm run test",
     "prepare": "tsc"
