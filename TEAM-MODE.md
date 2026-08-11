@@ -115,9 +115,11 @@ fix it. So it shipped as **phase 0**, not as a team feature:
 5. Script sources are excluded from the comparison entirely. They have their own rail and their
    own files, and merging them twice would conflict on the same content twice.
 
-`world/*.json` overlays remain unreconciled. That is the honest limit, and it is why the team
-rule below is what it is: **put intent in `world/` overlays, claim the overlay file, and let
-`game.json` be the upstream mirror.**
+`world/*.json` overlays remain unreconciled. That is the honest limit, and per decision 6 it is
+also why the team rule is **not** "move everything into overlays": `spawn_init` leaves `world/`
+empty and puts the whole spec in `game.json`, so the key-path merge above is what actually
+carries a team. Agents partition `game.json` by key path and `scripts/` by file, and the overlay
+gap only matters for a project that has chosen to use overlays anyway.
 
 ## The ledger
 
@@ -257,13 +259,13 @@ agent, a session per worktree, and a status view.
 4. **Ledger in `.git/spawn-team/`.** Zero config, auto-scoped to one game, impossible to commit
    by accident. A tracked file can come later if claims should be reviewable.
 5. **No `git worktree add` from the MCP.** `spawn_team_add` returns the exact command instead.
+6. **Claims key on `game.json` key paths and script globs, not `world/` overlay files.** This
+   doc originally said "put intent in overlays, claim the overlay file", but `spawn_init` leaves
+   `world/` empty and puts the entire spec in `game.json`, so in practice nobody uses overlays
+   and the phase 0 key-path merge is doing all the real work. Claiming what people actually edit
+   also downgrades the unreconciled overlay gap from an urgent hole to something that only
+   matters for a project already committed to overlays, rather than something we would be
+   pushing every team into.
 
-## Still open
-
-**Claim granularity.** This doc originally said "put intent in `world/` overlays, claim the
-overlay file". But `spawn_init` leaves `world/` empty and puts the entire spec in `game.json`,
-so in practice nobody uses overlays and the phase 0 key-path merge is doing all the real work.
-Claims should therefore be scoped to **`game.json` key paths and script globs**, not overlay
-files. That is what the phase 2 tool table above assumes. It also downgrades the unreconciled
-overlay gap from an urgent hole to something that only matters if we actively push people toward
-overlays, which on this reading we should not.
+Versioning: everything so far sits under `[Unreleased]`. The bump to 1.4.0 waits until phases 2
+and 3 land, so team mode ships as one coherent version rather than three partial ones.
