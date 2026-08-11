@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "spawn": {
+      "command": "node",
+      "args": ["/absolute/path/to/wfbcargo_spawn_mcp/dist/index.js"],
+      "env": {
+        "SPAWN_PROJECT_DIR": "/absolute/path/to/your-spawn-game",
+        "SPAWN_PLAY_HEADED": "1"
+      }
+    }
+  }
+}

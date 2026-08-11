@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+.spawn/
+*.log
+spawn.mjs.ref
+
+# Local agent/editor config — machine-specific, never commit
+.claude/settings.local.json
+.vscode/
+.idea/

@@ -1,0 +1,5 @@
+# Normalize to LF in the repository and on checkout. Keeps diffs clean across
+# platforms and keeps the dist/index.js shebang working on Unix.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
