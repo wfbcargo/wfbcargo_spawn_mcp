@@ -12,7 +12,28 @@ import { saveFile } from "./env.js";
 
 const BASE_VERSION_FILE = ".spawn/base-version";
 const BASE_SCRIPTS_FILE = ".spawn/base-scripts.json";
+const BASE_GAME_FILE = ".spawn/base-game.json";
+const REPLACED_GAME_FILE = ".spawn/replaced-game.json";
+/** Sits next to game.json so it reads like the script receipts and diffs against it. */
+export const SPEC_RECEIPT_FILE = "game.json.theirs";
 const FOLDABLE_SCRIPT_FILE = /\.(js|json)$/;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+  }
+  return false;
+}
 
 export function deepMerge(base: any, overlay: any): any {
   if (
@@ -145,6 +166,168 @@ export function writeBaseScripts(projectDir: string, scripts: Record<string, str
   saveFile(join(projectDir, BASE_SCRIPTS_FILE), JSON.stringify(scripts, null, 2));
 }
 
+/**
+ * The spec body without `scripts`. Script sources have their own three-way rail
+ * (base-scripts.json + .theirs receipts) and their own files on disk, so folding
+ * them into the spec merge would conflict on the same content twice.
+ */
+function withoutScripts(spec: unknown): Record<string, unknown> {
+  if (!isPlainObject(spec)) return {};
+  const { scripts: _scripts, ...rest } = spec;
+  return rest;
+}
+
+/** Rejoin a merged body with the upstream script map, matching how game.json is written today. */
+function composeSpec(body: Record<string, unknown>, upstream: unknown): Record<string, unknown> {
+  const scripts = isPlainObject(upstream) ? upstream.scripts : undefined;
+  return scripts === undefined ? { ...body } : { ...body, scripts };
+}
+
+/** `.spawn/base-game.json` — upstream's spec body as of the last sync point. */
+export function readBaseGame(projectDir: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(readFileSync(join(projectDir, BASE_GAME_FILE), "utf8"));
+    return isPlainObject(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeBaseGame(projectDir: string, spec: unknown): void {
+  saveFile(join(projectDir, BASE_GAME_FILE), JSON.stringify(withoutScripts(spec), null, 2));
+}
+
+/** Absent-key marker, so "you deleted it" is distinguishable from "you set it to undefined". */
+const MISSING = Symbol("missing");
+
+function sameSlot(a: unknown, b: unknown): boolean {
+  if (a === MISSING || b === MISSING) return a === b;
+  return deepEqual(a, b);
+}
+
+function mergeSlot(
+  base: unknown,
+  mine: unknown,
+  theirs: unknown,
+  path: string,
+  conflicts: string[]
+): unknown {
+  if (sameSlot(mine, theirs)) return mine; // both sides landed on the same thing
+  if (sameSlot(mine, base)) return theirs; // only upstream moved
+  if (sameSlot(theirs, base)) return mine; // only we moved
+
+  // Both moved and disagree. Recurse while all the live sides are objects, so a
+  // conflict lands on the narrowest key rather than the whole subtree.
+  if (isPlainObject(mine) && isPlainObject(theirs) && (base === MISSING || isPlainObject(base))) {
+    const baseObj = isPlainObject(base) ? base : {};
+    const out: Record<string, unknown> = {};
+    // Upstream key order first, then keys only we have: keeps game.json stable.
+    for (const key of new Set([...Object.keys(theirs), ...Object.keys(mine)])) {
+      const has = (o: Record<string, unknown>) => Object.prototype.hasOwnProperty.call(o, key);
+      const merged = mergeSlot(
+        has(baseObj) ? baseObj[key] : MISSING,
+        has(mine) ? mine[key] : MISSING,
+        has(theirs) ? theirs[key] : MISSING,
+        path ? `${path}.${key}` : key,
+        conflicts
+      );
+      if (merged !== MISSING) out[key] = merged;
+    }
+    return out;
+  }
+
+  conflicts.push(path || "<root>");
+  return mine; // never clobber local work; the receipt carries their side
+}
+
+/**
+ * Three-way merge of spec bodies by key path. Conflicts keep the local value and
+ * are reported as dotted paths — detect precisely, let the agent resolve, same
+ * contract as the script `.theirs` receipts.
+ */
+export function mergeSpec(
+  base: Record<string, unknown>,
+  mine: Record<string, unknown>,
+  theirs: Record<string, unknown>
+): { merged: Record<string, unknown>; conflicts: string[] } {
+  const conflicts: string[] = [];
+  const merged = mergeSlot(base, mine, theirs, "", conflicts);
+  return { merged: isPlainObject(merged) ? merged : {}, conflicts };
+}
+
+export type SpecSyncSummary = {
+  /** merged = three-way applied; replaced = no rail to merge against; skipped = not writing game.json. */
+  mode: "merged" | "replaced" | "skipped";
+  conflicts: string[];
+  /** Set when `mode` is "replaced" and content was actually dropped. */
+  backup?: string;
+  reason?: string;
+};
+
+/**
+ * Reconcile a pulled spec into game.json.
+ *
+ * Before this rail existed, a pull overwrote game.json wholesale, so any local
+ * edit to it vanished with no receipt and no mention in the summary — the one
+ * file `spawn_init` puts the entire spec into. Scripts were the only content
+ * with a merge story.
+ */
+export function syncPulledSpec(
+  projectDir: string,
+  pulledSpec: unknown,
+  { write = true }: { write?: boolean } = {}
+): SpecSyncSummary {
+  if (!write) return { mode: "skipped", conflicts: [] };
+
+  const gamePath = join(projectDir, "game.json");
+  const receiptPath = join(projectDir, SPEC_RECEIPT_FILE);
+  const theirsBody = withoutScripts(pulledSpec);
+
+  const raw = existsSync(gamePath) ? readFileSync(gamePath, "utf8") : null;
+  let mine: Record<string, unknown> | null = null;
+  let unreadable = false;
+  if (raw !== null) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (isPlainObject(parsed)) mine = parsed;
+      else unreadable = true;
+    } catch {
+      unreadable = true;
+    }
+  }
+
+  const base = readBaseGame(projectDir);
+  if (mine === null || base === null) {
+    // Legacy project or first pull: no merge base exists, so keep the old
+    // whole-replace behaviour rather than inventing conflicts for every key.
+    const dropping = unreadable || (mine !== null && !deepEqual(withoutScripts(mine), theirsBody));
+    if (dropping && raw !== null) saveFile(join(projectDir, REPLACED_GAME_FILE), raw);
+    saveFile(gamePath, JSON.stringify(composeSpec(theirsBody, pulledSpec), null, 2));
+    writeBaseGame(projectDir, pulledSpec);
+    return {
+      mode: "replaced",
+      conflicts: [],
+      ...(dropping && raw !== null ? { backup: REPLACED_GAME_FILE } : {}),
+      reason: unreadable
+        ? "game.json was not readable JSON"
+        : mine === null
+          ? "no local game.json"
+          : "no .spawn/base-game.json rail yet (project predates the spec merge) — future pulls will merge",
+    };
+  }
+
+  const { merged, conflicts } = mergeSpec(base, withoutScripts(mine), theirsBody);
+  saveFile(gamePath, JSON.stringify(composeSpec(merged, pulledSpec), null, 2));
+  writeBaseGame(projectDir, pulledSpec);
+
+  if (conflicts.length) {
+    saveFile(receiptPath, JSON.stringify(composeSpec(theirsBody, pulledSpec), null, 2));
+  } else {
+    rmSync(receiptPath, { force: true });
+  }
+  return { mode: "merged", conflicts };
+}
+
 function scriptFilePathForSpecKey(key: string): string | null {
   const direct = scriptKeyFilePath(key);
   if (direct) return direct;
@@ -163,7 +346,11 @@ export function specScriptsByFilePath(spec: any): Record<string, string> {
 }
 
 export function listConflictReceipts(dir: string): string[] {
-  return listFiles(join(dir, "scripts"), (f) => f.endsWith(".theirs"));
+  const specReceipt = join(dir, SPEC_RECEIPT_FILE);
+  return [
+    ...(existsSync(specReceipt) ? [specReceipt] : []),
+    ...listFiles(join(dir, "scripts"), (f) => f.endsWith(".theirs")),
+  ];
 }
 
 export type SyncSummary = {

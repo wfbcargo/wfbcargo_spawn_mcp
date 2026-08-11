@@ -15,9 +15,12 @@ import {
   formatIssues,
   listConflictReceipts,
   materializeScripts,
+  readBaseGame,
   readBaseVersion,
   specScriptsByFilePath,
   syncPulledScripts,
+  syncPulledSpec,
+  writeBaseGame,
   writeBaseScripts,
   writeBaseVersion,
 } from "./compile.js";
@@ -295,6 +298,7 @@ export function registerTools(server: McpServer): void {
         version = json.version;
         writeBaseVersion(dir, json.version);
         writeBaseScripts(dir, specScriptsByFilePath(json.gameSpec ?? {}));
+        writeBaseGame(dir, json.gameSpec ?? {});
         const { written, gameSpec } = materializeScripts(dir, json.gameSpec ?? {});
         scriptsMaterialized = written;
         saveFile(gamePath, JSON.stringify(gameSpec, null, 2));
@@ -553,10 +557,35 @@ export function registerTools(server: McpServer): void {
       }
 
       const sync = syncPulledScripts(dir, json.gameSpec ?? {}, json.version);
+      const specSync = syncPulledSpec(dir, json.gameSpec ?? {}, { write: saveGameJson });
       writeBaseVersion(dir, json.version);
-      if (saveGameJson) {
-        saveFile(join(dir, "game.json"), JSON.stringify(json.gameSpec, null, 2));
+
+      const scriptConflicts = sync.summary.conflicts.length;
+      const specConflicts = specSync.conflicts.length;
+      const notes: string[] = [];
+      if (specConflicts > 0) {
+        notes.push(
+          `game.json: ${specConflicts} key(s) changed both locally and upstream — kept YOURS at ${specSync.conflicts.join(", ")}, upstream's whole spec is in game.json.theirs. Reconcile those keys, delete the receipt, then push.`
+        );
       }
+      if (scriptConflicts > 0) {
+        notes.push("Scripts: merge each .theirs into its file, delete the receipt, then push.");
+      }
+      if (specSync.mode === "replaced" && specSync.backup) {
+        notes.push(
+          `game.json was replaced wholesale (${specSync.reason}). The previous file is at ${specSync.backup} if you need anything back.`
+        );
+      }
+      if (!notes.length) {
+        notes.push(
+          sync.summary.created.length > 0
+            ? `Clean pull. ${sync.summary.created.length} new upstream script(s) written into scripts/ — read them before editing nearby code.`
+            : isHeadPull
+              ? "Clean pull."
+              : "Local project reset to this snapshot — next push will use this baseVersion."
+        );
+      }
+
       return text({
         version: json.version,
         mode,
@@ -565,15 +594,9 @@ export function registerTools(server: McpServer): void {
         applied: true,
         savedGameJson: saveGameJson,
         sync: sync.summary,
-        hasConflicts: sync.summary.conflicts.length > 0,
-        note:
-          sync.summary.conflicts.length > 0
-            ? "Merge each .theirs into its file, delete the receipt, then push."
-            : sync.summary.created.length > 0
-              ? `Clean pull. ${sync.summary.created.length} new upstream script(s) written into scripts/ — read them before editing nearby code.`
-              : isHeadPull
-                ? "Clean pull."
-                : "Local project reset to this snapshot — next push will use this baseVersion.",
+        spec: specSync,
+        hasConflicts: scriptConflicts + specConflicts > 0,
+        note: notes.join(" "),
       });
     }
   );
@@ -637,7 +660,7 @@ export function registerTools(server: McpServer): void {
         return err(
           `Unresolved sync conflict receipts:\n${receipts
             .map((r) => `  ${relative(dir, r)}`)
-            .join("\n")}\nMerge each .theirs into its file, delete the receipt, then push.`
+            .join("\n")}\nMerge each .theirs into the file it sits next to (game.json.theirs is upstream's whole spec), delete the receipt, then push.`
         );
       }
       // With force, receipts are discarded — but only AFTER the push lands, so a
@@ -685,6 +708,9 @@ export function registerTools(server: McpServer): void {
       if (!dryRun) {
         writeBaseVersion(dir, json.version);
         writeBaseScripts(dir, specScriptsByFilePath(spec));
+        // Upstream now holds what we compiled (game.json + world/ overlays), so
+        // that is the base the next pull merges against.
+        writeBaseGame(dir, spec);
         for (const receipt of receipts) rmSync(receipt, { force: true });
       }
 
@@ -839,8 +865,16 @@ export function registerTools(server: McpServer): void {
         projectDir: dir,
         apiUrl: env.apiUrl || null,
         agentKey: env.agentKey ? maskToken(env.agentKey) : null,
+        // "process" means the key came from the MCP config rather than this
+        // project's .env — the thing to check first when an agent turns out to
+        // be pushing as a different connection than you expected.
+        credentialSource: env.sources,
         variantId: env.variantId || null,
         baseVersion: localBaseVersion,
+        // False on a project that predates the spec merge: the next pull replaces
+        // game.json wholesale (with a backup), establishes the rail, and merges
+        // from then on.
+        hasSpecRail: readBaseGame(dir) !== null,
         conflictReceipts,
         hasGameJson: existsSync(join(dir, "game.json")),
         hasGuide: existsSync(join(dir, ".spawn", "guide.md")),

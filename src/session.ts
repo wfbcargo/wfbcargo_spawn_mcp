@@ -28,12 +28,12 @@ Build loop (show, don't tell):
 4. After each meaningful push: spawn_play_screenshot (or reload if the client didn't reshape). Look at the image. If wrong, fix and push again — don't claim done from API success alone.
 5. Exercise gameplay with spawn_play_input (WASD, Space, clicks), then screenshot again. Your game's UI (ui.js) renders in a cross-origin iframe that spawn_play_eval CANNOT read or click — to press a button, screenshot, read its position off the image, and click those coordinates with spawn_play_input.
 6. Debug: spawn_logs + spawn_play_console for script/page errors; spawn_exec for live world queries. spawn_exec needs a live room (open a play client first) and cannot run api.sql at all — verify persistence through replicated state, not by querying the database.
-7. On version_conflict (409): spawn_latest (head), merge .theirs receipts, push again.
+7. On version_conflict (409): spawn_latest (head), merge .theirs receipts, push again. A pull three-way merges both scripts/ files and game.json against the last-seen upstream, so disjoint edits just compose. Where both sides changed the same thing it keeps YOURS, names the file (or the dotted game.json key path) in the result, and drops a .theirs receipt beside it — reconcile, delete the receipt, then push. Push refuses to run while a receipt is unresolved.
 8. After meaningful pushes, spawn_savi with what changed. It is a one-way note into the creator's studio chat (background context for Savi), not a request — there is no reply channel and no way to hand Savi a task from here.
 9. spawn_play_close when finished.
 
 Multi-agent (same creator account — no crew setup):
-- Each agent needs its own bootstrap key (settings → build with your own agent) and its own local projectDir / worktree. Never share one SPAWN_PROJECT_DIR — agents will thrash game.json, scripts/, and .spawn/base-version.
+- Each agent needs its own bootstrap key (settings → build with your own agent) and its own local projectDir / worktree. Never share one SPAWN_PROJECT_DIR — agents will thrash game.json, scripts/, and .spawn/base-version. Credentials come from the project's own .env first, so a worktree per agent is what makes them separate connections; if SPAWN_AGENT_KEY is set in the MCP config it is only a fallback for projects that have none (spawn_status reports which source won).
 - Point every agent at the same SPAWN_VARIANT_ID. Concurrent pushes are supported (optimistic concurrency); 409s are expected, not bugs.
 - Ask the creator to publish in the Spawn UI before unleashing the team — published (mode=live) stays stable for players while agents push to dev head. Agents cannot publish via API; use spawn_latest mode=live (read) or spawn_status to confirm a published baseline exists.
 - Start small (2–3 agents). Partition work by script/area so conflicts stay rare. Prefer spawn_latest after gaps; restore with mode=live applyLocal:true only when intentionally resetting.
