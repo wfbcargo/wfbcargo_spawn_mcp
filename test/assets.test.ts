@@ -17,10 +17,12 @@ import {
   searchAssets,
   shardKey,
   shardsFor,
+  summarizePathWarnings,
   syncAdvice,
   upsertAsset,
   writeBank,
   type Bank,
+  type PathWarning,
 } from "../src/assets.js";
 
 const roots: string[] = [];
@@ -105,9 +107,19 @@ describe("classifyAssetPath", () => {
 });
 
 describe("pathWarning", () => {
+  const use = (variantId: string | null) => ({
+    variantId,
+    game: null,
+    project: "C:/games/one",
+    files: ["game.json"],
+    source: "scan" as const,
+    lastSeenAt: NOW,
+  });
+
   it("warns that a root-namespace path is globally shared", () => {
     const w = pathWarning(classifyAssetPath("cdn/model-tree.glb"));
-    assert.ok(w && w.includes("global"));
+    assert.ok(w && w.text.includes("global"));
+    assert.equal(w!.kind, "root-namespace");
   });
 
   it("says nothing about a canonical moodboard path", () => {
@@ -116,7 +128,98 @@ describe("pathWarning", () => {
 
   it("mentions the canonical families for a custom slug", () => {
     const w = pathWarning(classifyAssetPath("cdn/moodboard-mine/model-x.glb"));
-    assert.ok(w && w.includes("canonical"));
+    assert.ok(w && w.text.includes("canonical"));
+    assert.equal(w!.kind, "custom-slug");
+  });
+
+  it("asks for action on a path nothing has used or generated yet", () => {
+    const w = pathWarning(classifyAssetPath("cdn/model-tree.glb"));
+    assert.equal(w!.severity, "act");
+  });
+
+  it("drops to a note once the path is generated, since it cannot be re-rolled", () => {
+    const w = pathWarning({ ...classifyAssetPath("cdn/model-tree.glb"), exists: true, usedIn: [] });
+    assert.equal(w!.severity, "note");
+    assert.ok(w!.text.includes("re-rolled"));
+    // The diagnosis still lands; only the impossible instruction goes away.
+    assert.ok(w!.text.includes("namespace"));
+    assert.ok(!w!.text.includes("still yours to choose"));
+  });
+
+  it("treats a path a game already references as spent, and counts games not directories", () => {
+    const w = pathWarning({
+      ...classifyAssetPath("cdn/effect-ember-glow.png"),
+      exists: null,
+      usedIn: [use("v1"), use("v1"), use("v2")],
+    });
+    assert.equal(w!.severity, "note");
+    assert.ok(w!.text.includes("2 games"));
+  });
+
+  it("still asks for action when storage says the referenced path was never fetched", () => {
+    // Written into game.json but never generated: the one case where a rename
+    // is both possible and worth doing.
+    const w = pathWarning({
+      ...classifyAssetPath("cdn/effect-ember-glow.png"),
+      exists: false,
+      usedIn: [use("v1")],
+    });
+    assert.equal(w!.severity, "act");
+    assert.ok(w!.text.includes("not"));
+  });
+
+  it("keeps the same split for a custom slug", () => {
+    const fresh = pathWarning(classifyAssetPath("cdn/moodboard-mine/model-x.glb"));
+    const spent = pathWarning({ ...classifyAssetPath("cdn/moodboard-mine/model-x.glb"), exists: true, usedIn: [] });
+    assert.equal(fresh!.severity, "act");
+    assert.equal(spent!.severity, "note");
+  });
+});
+
+describe("summarizePathWarnings", () => {
+  const spent = (path: string): PathWarning => ({
+    path,
+    kind: "root-namespace",
+    severity: "note",
+    text: `${path} spent`,
+  });
+  const fresh = (path: string): PathWarning => ({
+    path,
+    kind: "root-namespace",
+    severity: "act",
+    text: `${path} fresh`,
+  });
+
+  it("collapses spent paths to one line per kind instead of repeating the sentence", () => {
+    const out = summarizePathWarnings(Array.from({ length: 63 }, (_, i) => spent(`cdn/a${i}.png`)));
+    assert.equal(out.warnings, undefined);
+    assert.equal(out.namespaceNotes!.length, 1);
+    assert.ok(out.namespaceNotes![0].startsWith("63 paths are bare global names"));
+  });
+
+  it("keeps one rollup per kind", () => {
+    const out = summarizePathWarnings([
+      spent("cdn/a.png"),
+      { path: "cdn/moodboard-mine/b.png", kind: "custom-slug", severity: "note", text: "x" },
+    ]);
+    assert.equal(out.namespaceNotes!.length, 2);
+  });
+
+  it("names actionable paths individually, so they are not buried by the spent ones", () => {
+    const out = summarizePathWarnings([...Array.from({ length: 40 }, (_, i) => spent(`cdn/a${i}.png`)), fresh("cdn/new.png")]);
+    assert.deepEqual(out.warnings, ["cdn/new.png fresh"]);
+    assert.equal(out.namespaceNotes!.length, 1);
+  });
+
+  it("caps the actionable list and says how many it left out", () => {
+    const out = summarizePathWarnings(Array.from({ length: 14 }, (_, i) => fresh(`cdn/n${i}.png`)));
+    assert.equal(out.warnings!.length, 11);
+    assert.ok(out.warnings![10].includes("4 more"));
+    assert.equal(out.namespaceNotes, undefined);
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    assert.deepEqual(summarizePathWarnings([]), {});
   });
 });
 

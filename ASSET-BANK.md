@@ -251,6 +251,32 @@ first person to fetch that path caused to be generated. A moodboard slug is the
 defense. `ingested` paths are excluded from naming guidance entirely: they are
 opaque blobs, not names anyone should imitate.
 
+### Warning volume, and why it is not constant
+
+A path cannot be re-rolled, so "prefer a namespaced path" is advice about a
+*future* name. Aimed at a path that already exists it is not advice at all —
+there is no action behind it. That distinction is the warning's severity:
+
+- **`act`** — nothing has been generated here. Either storage says so
+  (`exists: false`, definitive) or nothing is recorded as using it, which is the
+  moment of invention and the highest-value moment to say it. Full advice.
+- **`note`** — the path is spent: storage confirmed the bytes, or a real game
+  already references it (`exists` unknown, but referencing a path is what fetches
+  it, and renaming now means editing shipped content). The diagnosis still
+  lands — a caller should know a bare name is globally shared — but the
+  instruction becomes "apply this to the next name".
+
+`exists: false` outranks being referenced, because a path written into
+`game.json` that has never been fetched is precisely the case that is still
+fixable.
+
+A scan reports the two at different volumes. Actionable paths are named
+individually; spent ones collapse to **one line per kind** with a count and a
+`spawn_asset_search namespace:"root"` pointer. Before this, scanning one real
+project emitted the same sentence sixty-three times with only the path changing,
+truncated to ten — which reads as ten findings, recommends an impossible action
+for every path listed, and buries the one path that could still be renamed.
+
 `kind` comes from the extension (`.glb` → model, `.png`/`.jpg` → image,
 `.mp3`/`.wav` → audio). `prefix` is the first hyphen-delimited token of the
 filename, recorded as-is rather than validated against a closed list — the
@@ -293,7 +319,7 @@ without the engine.
 
 ## Tools
 
-Four, which takes the solo list from 27 to 31. Kept deliberately small; the
+Five, which takes the solo list from 27 to 32. Kept deliberately small; the
 temptation is to add per-field editors and a delete tool, and none of them earn
 their slot.
 

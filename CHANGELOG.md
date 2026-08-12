@@ -2,6 +2,13 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-08-12
+
+### Changed
+
+- **Namespace warnings are loud only while the name can still change.** `pathWarning` now carries a severity. A path storage has never seen, or that nothing is recorded as using, is still at the moment of invention and gets the full recommendation. A path that is already generated (`exists: true`) or already referenced by a game cannot be re-rolled, so the diagnosis stays and the instruction becomes "apply this to the next name". `exists: false` outranks being referenced, because a path written into `game.json` but never fetched is exactly the case that is still fixable.
+- **`spawn_asset_scan` reports the two at different volumes.** Spent paths collapse to one counted line per kind with a `spawn_asset_search namespace:"root"` pointer; actionable ones are still named individually. A scan of one real project used to emit the same sentence sixty-three times with only the path changing, truncated to ten — which reads as ten findings, recommends an impossible action for every path listed, and buries the one path that could still be renamed.
+
 ## [1.5.0] - 2026-08-12
 
 A cross-project asset catalog, and a correction to what this server told the model about making art. Design: [ASSET-BANK.md](ASSET-BANK.md).

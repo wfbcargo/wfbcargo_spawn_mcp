@@ -1,5 +1,5 @@
 /**
- * The four asset-bank tools. Storage and grammar live in assets.ts; this file is
+ * The five asset-bank tools. Storage and grammar live in assets.ts; this file is
  * argument shapes, output shaping, and the messages that teach the model why a
  * path is risky. Design rationale: ASSET-BANK.md.
  */
@@ -22,11 +22,13 @@ import {
   scanDirectory,
   searchAssets,
   shardsFor,
+  summarizePathWarnings,
   syncAdvice,
   upsertAsset,
   writeBank,
   type Asset,
   type Bank,
+  type PathWarning,
 } from "./assets.js";
 import { api, apiError, latestPath } from "./client.js";
 import { loadEnv, requireEnv, resolveProjectDir } from "./env.js";
@@ -320,7 +322,7 @@ export function registerAssetTools(server: McpServer): void {
         let next = bank;
         const perDir: Array<Record<string, unknown>> = [];
         const created: string[] = [];
-        const warnings = new Set<string>();
+        const warnings = new Map<string, PathWarning>();
         const touched: string[] = [];
 
         for (const dir of targets) {
@@ -338,7 +340,9 @@ export function registerAssetTools(server: McpServer): void {
             if (up.created) created.push(hit.path);
             const asset = findAsset(next, hit.path);
             const warning = asset ? pathWarning(asset) : null;
-            if (warning) warnings.add(warning);
+            // Keyed by path: the same asset scanned from two of the given
+            // directories is one warning, not two.
+            if (warning) warnings.set(warning.path, warning);
           }
           perDir.push({
             dir,
@@ -356,7 +360,7 @@ export function registerAssetTools(server: McpServer): void {
           newToBank: created.length,
           bankTotal: next.assets.length,
           ...(created.length ? { newPaths: created.slice(0, 40) } : {}),
-          ...(warnings.size ? { warnings: [...warnings].slice(0, 10) } : {}),
+          ...summarizePathWarnings([...warnings.values()]),
           ...(perDir.some((d) => d.variantId === null)
             ? {
                 note: "A project whose own .env names no SPAWN_VARIANT_ID cannot be matched to a game, so it counts as its own game in reuse counts. Run this from a bootstrapped project to attribute it correctly.",
@@ -554,7 +558,7 @@ export function registerAssetTools(server: McpServer): void {
         recorded: full(outcome.asset),
         addedToBank: outcome.created,
         bankTotal: outcome.total,
-        ...(warning ? { warning } : {}),
+        ...(warning ? { warning: warning.text } : {}),
         ...(outcome.asset.verdict === "bad" && !outcome.asset.replacedBy
           ? {
               note: "Marked bad with no replacement. A bad name is most useful when it points at the name that worked — pass replacedBy once you have one.",
@@ -636,7 +640,14 @@ export function registerAssetTools(server: McpServer): void {
         });
       }
 
-      const warning = pathWarning(banked ?? classifyAssetPath(path));
+      // The check that just ran is fresher than anything banked, and it is the
+      // whole point of previewing: it settles whether the name is still free.
+      // A transport failure (status 0) is not evidence either way.
+      const warning = pathWarning({
+        ...(banked ?? classifyAssetPath(path)),
+        exists: check.status === 0 ? (banked?.exists ?? null) : check.exists,
+        usedIn: banked?.usedIn ?? [],
+      });
       const advice = syncAdvice(bankNow);
       const meta = {
         ...(advice ? { syncAdvice: advice } : {}),

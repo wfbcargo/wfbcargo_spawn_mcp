@@ -231,7 +231,9 @@ Every asset tool reports a `syncAdvice` line when the bank is empty, never synce
 
 `spawn_asset_preview` checks the storage host directly rather than the `/cdn/` cook route. Storage answers a plain 200/404 and never generates, so a 404 honestly means "not created yet" instead of "not allowed to ask" — and for images it hands the bytes back inline, so the model judges the art instead of guessing from the filename. Models and audio report existence only; put those in the world and use `spawn_play_screenshot`.
 
-Paths are classified as `moodboard` (the documented namespaced form), `root` (a bare global name, warned about on every retrieval), `custom`, or `ingested` (opaque `public.<base64>` uploads, which carry no naming guidance and rank last).
+Paths are classified as `moodboard` (the documented namespaced form), `root` (a bare global name, shared with every other Spawn game), `custom`, or `ingested` (opaque `public.<base64>` uploads, which carry no naming guidance and rank last).
+
+**A namespace warning is loud only while the name can still change.** A path that is already generated — or already referenced by a game — cannot be re-rolled, so telling you to rename it is not advice; those collapse to one counted line per kind. A path storage has never seen gets the full recommendation, because that is the only moment it can be acted on.
 
 The design, including what is deliberately not built, is in [ASSET-BANK.md](ASSET-BANK.md).
 

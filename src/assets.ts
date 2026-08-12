@@ -309,24 +309,137 @@ export function classifyAssetPath(path: string): DerivedFields {
   };
 }
 
+export type PathWarningKind = "root-namespace" | "custom-slug";
+
 /**
- * Why a path is risky to reuse, or null when it is fine.
+ * Whether the caller can still do anything about it.
+ *
+ * `act` — nothing has been generated at this path yet, so the name is still
+ * changeable and the advice is worth following now.
+ * `note` — the path is already spent. A path cannot be re-rolled, so telling
+ * the caller to rename it is not advice, it is noise; the rule applies to the
+ * next name instead.
+ */
+export type PathWarningSeverity = "act" | "note";
+
+export type PathWarning = {
+  path: string;
+  kind: PathWarningKind;
+  severity: PathWarningSeverity;
+  text: string;
+};
+
+/** The advice half of a warning, keyed on whether the name is still yours to choose. */
+function nameFate(
+  asset: Partial<Pick<Asset, "exists" | "usedIn">>
+): { severity: PathWarningSeverity; tail: string } {
+  if (asset.exists === true) {
+    return {
+      severity: "note",
+      tail: "It is already generated, and a path cannot be re-rolled — keep using it. The rule applies to names you create from here.",
+    };
+  }
+  if (asset.exists === false) {
+    // Checked, and storage has nothing. Definitive, and it outranks being
+    // referenced: a path written into game.json but never fetched is exactly the
+    // case that is still fixable.
+    return {
+      severity: "act",
+      tail: "Storage says nothing has been generated here yet, so the name is still yours to choose: prefer cdn/moodboard-<slug>/<prefix>-<name>.<ext> before the first fetch spends it.",
+    };
+  }
+  const games = asset.usedIn?.length ? gameCount({ usedIn: asset.usedIn }) : 0;
+  if (games > 0) {
+    // Referenced by a real game but never checked against storage. Almost
+    // certainly fetched (that is what referencing it does), and renaming it now
+    // means editing shipped content — so this is a note, with the one check that
+    // could still prove otherwise.
+    return {
+      severity: "note",
+      tail: `It is already referenced by ${games} game${games === 1 ? "" : "s"}, so the name is very likely spent — spawn_asset_preview says for certain. The rule applies to names you create from here.`,
+    };
+  }
+  return {
+    severity: "act",
+    tail: "Nothing is recorded as using it, so the name may still be yours to choose: prefer cdn/moodboard-<slug>/<prefix>-<name>.<ext>, and spawn_asset_preview says whether the first fetch has already spent it.",
+  };
+}
+
+/**
+ * Why a path is risky, or null when it is fine.
  *
  * The root namespace is global: if naming is creating and there is no
  * namespacing, `cdn/model-tree.glb` is whatever the first fetch anywhere caused
- * to be generated. A moodboard slug is the defense, so its absence is worth
- * saying out loud every time.
+ * to be generated. A moodboard slug is the defense.
+ *
+ * The diagnosis fires on every such path, but the *advice* is gated on whether
+ * the name can still change. Repeating "prefer a namespaced path" over sixty
+ * already-generated references is unactionable — the caller cannot re-roll any
+ * of them — and burying the handful of paths that are still unspent underneath
+ * that noise is the actual cost. `exists` and `usedIn` are optional so a bare
+ * `classifyAssetPath` result still warns; unknown provenance is treated as the
+ * moment of invention, which is when the advice matters most.
  */
 export function pathWarning(
-  asset: Pick<Asset, "namespace" | "slug" | "canonicalSlug" | "path">
-): string | null {
-  if (asset.namespace === "root") {
-    return `${asset.path} has no moodboard-<slug>/ namespace, so it shares one global name with every other Spawn game. Prefer cdn/moodboard-<slug>/<prefix>-<name>.<ext> for anything you generate.`;
+  asset: Pick<Asset, "namespace" | "slug" | "canonicalSlug" | "path"> &
+    Partial<Pick<Asset, "exists" | "usedIn">>
+): PathWarning | null {
+  const head =
+    asset.namespace === "root"
+      ? {
+          kind: "root-namespace" as const,
+          text: `${asset.path} is a bare global name: with no moodboard-<slug>/ folder it shares one namespace with every other Spawn game, so whatever the first fetch anywhere generated is what you get.`,
+        }
+      : asset.namespace === "moodboard" && !asset.canonicalSlug
+        ? {
+            kind: "custom-slug" as const,
+            text: `${asset.path} uses the custom slug "${asset.slug}" rather than one of the nine canonical families (${CANONICAL_SLUGS.join(", ")}). Fine for a look of your own, but a canonical slug is how a world shares one namespace with the rest of Spawn.`,
+          }
+        : null;
+  if (!head) return null;
+  const { severity, tail } = nameFate(asset);
+  return { path: asset.path, kind: head.kind, severity, text: `${head.text} ${tail}` };
+}
+
+/** Text for the rollup line, per kind. `n` is how many spent paths it stands for. */
+const SPENT_ROLLUP: Record<PathWarningKind, (n: number) => string> = {
+  "root-namespace": (n) =>
+    `${n} path${n === 1 ? " is a" : "s are"} bare global name${n === 1 ? "" : "s"} (cdn/<name>.<ext>, no moodboard-<slug>/ folder), sharing one namespace with every other Spawn game. ${n === 1 ? "It is" : "They are"} already in use and cannot be re-rolled, so this is a rule for new names only: cdn/moodboard-<slug>/<prefix>-<name>.<ext>. spawn_asset_search namespace:"root" lists them.`,
+  "custom-slug": (n) =>
+    `${n} path${n === 1 ? " uses" : "s use"} a custom moodboard slug rather than one of the nine canonical families (${CANONICAL_SLUGS.join(", ")}). Already in use and not re-rollable; fine for a look of your own, and worth a canonical slug on the next one.`,
+};
+
+/**
+ * A scan's worth of warnings, reported at two different volumes.
+ *
+ * Without this, a scan of one real project emitted the same sentence sixty-odd
+ * times with only the path changing, truncated to ten — which reads as ten
+ * findings, hides the one path that is still fixable, and recommends an action
+ * that is impossible for every path listed. Actionable ones are named
+ * individually; spent ones collapse to a single line per kind that says what the
+ * namespace means and where to see the full list.
+ */
+export function summarizePathWarnings(
+  warnings: PathWarning[],
+  limit = 10
+): { warnings?: string[]; namespaceNotes?: string[] } {
+  const act = warnings.filter((w) => w.severity === "act");
+  const spent = new Map<PathWarningKind, number>();
+  for (const w of warnings) {
+    if (w.severity === "note") spent.set(w.kind, (spent.get(w.kind) ?? 0) + 1);
   }
-  if (asset.namespace === "moodboard" && !asset.canonicalSlug) {
-    return `${asset.path} uses the custom slug "${asset.slug}" rather than one of the nine canonical families (${CANONICAL_SLUGS.join(", ")}). Fine for a look of your own, but worlds share warmer namespaces on a canonical slug.`;
-  }
-  return null;
+  const notes = [...spent.entries()].map(([kind, n]) => SPENT_ROLLUP[kind](n));
+  return {
+    ...(act.length
+      ? {
+          warnings: [
+            ...act.slice(0, limit).map((w) => w.text),
+            ...(act.length > limit ? [`…and ${act.length - limit} more not generated yet.`] : []),
+          ],
+        }
+      : {}),
+    ...(notes.length ? { namespaceNotes: notes } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
