@@ -184,7 +184,10 @@ describe("spawn_getting_started", () => {
     const body = textOf(await call("spawn_getting_started"));
     assert.match(body, /Art, UI, and look/);
     assert.match(body, /drawn-art/);
-    assert.match(body, /CANNOT generate images or conjure 3D models/);
+    // Naming IS the generation lane — the guide used to claim the opposite.
+    assert.match(body, /Naming is creating/);
+    assert.match(body, /moodboard-<slug>/);
+    assert.match(body, /spawn_asset_search/);
     assert.match(body, /spawn_play_screenshot/);
   });
 

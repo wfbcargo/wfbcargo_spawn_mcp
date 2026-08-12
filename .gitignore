@@ -6,6 +6,11 @@ dist/
 *.log
 spawn.mjs.ref
 
+# Asset bank. It lives in ~/.spawn-mcp/assets by default, so it is already
+# outside any checkout — this only catches a SPAWN_ASSET_BANK pointed inside
+# one. It holds absolute local paths and variant ids: personal, never publish.
+.spawn-mcp/
+
 # Local agent/editor config — machine-specific, never commit
 .claude/settings.local.json
 .vscode/

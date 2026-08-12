@@ -40,6 +40,7 @@ See `mcp.example.json`. On Windows use forward slashes (`C:/Users/you/...`).
 | `SPAWN_PLAY_HEADED` | `1` | `0` forces headless (see the warning below); games will not render |
 | `SPAWN_TEAM` | unset | `1` enables team mode: adds `spawn_team_*` and the session latch |
 | `SPAWN_TEAM_DIR` | shared `.git/spawn-team` | Ledger location, for agents that are not worktrees of one repo |
+| `SPAWN_ASSET_BANK` | `~/.spawn-mcp/assets` | Cross-project asset catalog directory |
 | `SPAWN_HTTP_TIMEOUT_MS` | `60000` | Abort API calls that hang |
 | `SPAWN_API_URL` | pinned in `src/config.ts` | Dev override only; must be `https` (or localhost) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright default | Override where Chromium is installed |
@@ -109,7 +110,7 @@ Four behaviours change while it is on:
 
 Claim `game.json` key paths (`entities.player`, `world.terrain`) and script globs (`scripts/hud/**`). Everything except `scripts/**` is claimed by key path, because `spawn_init` puts the whole spec in `game.json`; a `world/foo.json`-style pattern is rejected rather than silently never matching.
 
-Solo, none of this exists: the tool list stays at 27, nothing latches, and pushes take no lock.
+Solo, none of this exists: the tool list stays at 32, nothing latches, and pushes take no lock.
 
 Adding an agent is two calls plus one command you run yourself:
 
@@ -160,6 +161,15 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_savi` | Background context for Savi |
 | `spawn_revoke` / `spawn_status` | Disconnect / local + head/published health |
 
+### Asset bank
+| Tool | Purpose |
+|------|---------|
+| `spawn_asset_sync` | Pull every game on your account and harvest its live spec (slow; the authoritative fill) |
+| `spawn_asset_scan` | Harvest `cdn/` paths from local projects into the cross-project bank |
+| `spawn_asset_search` | Find an asset you already used, before inventing a new name (`facets`, `category`, `minGames`) |
+| `spawn_asset_note` | Name, categorize, describe, mark good/bad, point a bad name at its replacement |
+| `spawn_asset_preview` | Check existence on the CDN; render images inline so the model can see them |
+
 ### Play browser
 | Tool | Purpose |
 |------|---------|
@@ -181,7 +191,7 @@ The most common quality gap in an agent build is visual, and it has two causes w
 
 Rather than rely on a prompt telling the model to go and read them, the endpoints are shaped to pull skills in: `spawn_skill` takes `ids: [...]` so the natural call carries the whole set (mechanic *and* look), `spawn_push` and `spawn_play_screenshot` say in their own descriptions that a plain-looking result is a missing skill rather than a missing feature, and a wrong id answers with the full menu, so guessing is cheaper than looking up.
 
-**This MCP has no asset-generation lane.** Conjuring a 3D model from a prompt or generating a texture belongs to Savi in the studio; there is no agent API for it. An agent's art levers are code-drawn textures (`drawn-art`), scripted materials, composed primitives, and `cdn/` assets that already exist. When a build genuinely needs a generated asset, ask Savi in the studio for it and let the agent wire it in.
+**Naming is creating.** A `cdn/` asset is generated on first fetch of its path and cached there forever, so the path *is* the asset: reference `/cdn/moodboard-<slug>/<category>-<name>.<ext>` and that model, texture, or clip comes into being. Agents create art by naming it, and the name is the prompt. Two consequences the tools are built around: a path cannot be re-rolled (a bad result means picking a different name, permanently), and a bare `/cdn/<name>.<ext>` with no moodboard folder shares one global namespace with every other game. See **[the asset bank](#asset-bank)** below and [ASSET-BANK.md](ASSET-BANK.md).
 
 ```
 spawn_skill ids=["game-ui","drawn-art","looks"]   # load a set; a bad id returns the menu
@@ -191,6 +201,39 @@ spawn_skills detail="brief"                       # id + name only (the full ind
 ```
 
 The index is read from `.spawn/skills.json` when `spawn_init` / `spawn_docs` has already saved it, so browsing costs no network call; `refresh: true` re-fetches.
+
+## Asset bank
+
+Because a path *is* an asset, the same path in two games is the same asset — cross-project sharing costs nothing and needs no tooling. What Spawn has no API for is a **catalog**: the guide says so outright ("there is no catalog"). So a name that produced something great is unrecoverable knowledge the moment you forget how you spelled it, and a name that produced something bad is permanently bad, because you cannot re-roll a path.
+
+The bank is the local record of that judgment, kept in `~/.spawn-mcp/assets/` — user-level, not per-repo, since its whole value is crossing games.
+
+```
+spawn_asset_sync                                           # every game on your account (start here)
+spawn_asset_scan dirs=["../game-one","../game-two"]        # local-only: harvest what the checkouts cite
+spawn_asset_note path="cdn/…/texture-packed-earth.png" name="dirt" category="terrain" verdict="good"
+spawn_asset_search query="dirt"                            # before inventing a name
+spawn_asset_search category="terrain"                      # or by your own grouping
+spawn_asset_search facets=true                             # what categories/kinds/families exist
+spawn_asset_search minGames=2                              # proven: reused across games
+spawn_asset_preview path="dirt"                            # a name works anywhere a path does
+```
+
+**Start with `spawn_asset_sync`.** There is no asset API on Spawn (`/api/agent/v1/assets` and friends are `404`), so the only account-wide record is what your games have pushed. The sync lists every game you own, fetches each one's current spec, and harvests it — which sees things a local scan cannot: games with no checkout on this machine, and assets a teammate or Savi pushed that never reached your disk. On the account this was built against a local scan of three projects found **169** assets and the sync found **408**. It is slow by design (one spec fetch per game, four at a time; six games ≈ 3s), so it is a tool you run deliberately.
+
+Every asset tool reports a `syncAdvice` line when the bank is empty, never synced, or over a week stale — not just search. A stale bank answers "no match", the model coins a fresh path, and an asset that already exists under a good name gets regenerated under a second one. Since a path cannot be re-rolled, those two names can never be merged.
+
+**Name your assets.** A name is a short unique handle, and every tool that takes a path takes a name instead — `spawn_asset_preview path="knight"` rather than 60 characters of style family and hyphenation. Alongside it, `category` is your own grouping ("enemies", "ui-icons"), kept separate from the filename's `prefix` (`model-`, `texture-`) so a rescan can never overwrite a judgement.
+
+**Results report how many *games* use an asset, not how many directories.** In team mode one game is several worktrees, so counting directories would report a three-agent team as three games. Each use records the variant id from that project's own `.env`, and the count collapses on it. Reuse across games is the best evidence an asset actually worked, so it feeds ranking and `minGames` filters on it.
+
+**One file per style family**, plus `_meta.json`, with the `root` namespace split by prefix (`root-effect.json`, `root-sfx.json`) since it is usually the biggest group. At a measured 821 bytes/asset a 10k-asset bank is ~7.8 MB and parses in ~19 ms, so this is not about search speed — it keeps a one-field note from rewriting the whole catalog, and keeps each file openable.
+
+`spawn_asset_preview` checks the storage host directly rather than the `/cdn/` cook route. Storage answers a plain 200/404 and never generates, so a 404 honestly means "not created yet" instead of "not allowed to ask" — and for images it hands the bytes back inline, so the model judges the art instead of guessing from the filename. Models and audio report existence only; put those in the world and use `spawn_play_screenshot`.
+
+Paths are classified as `moodboard` (the documented namespaced form), `root` (a bare global name, warned about on every retrieval), `custom`, or `ingested` (opaque `public.<base64>` uploads, which carry no naming guidance and rank last).
+
+The design, including what is deliberately not built, is in [ASSET-BANK.md](ASSET-BANK.md).
 
 ## Development
 
