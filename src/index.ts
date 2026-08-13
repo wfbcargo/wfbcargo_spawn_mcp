@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerAssetTools } from "./asset-tools.js";
+import { registerAuditTools } from "./audit-tools.js";
 import { closePlay } from "./browser.js";
 import { registerPlayTools } from "./play-tools.js";
 import { SESSION_GUIDE } from "./session.js";
@@ -47,6 +48,7 @@ const team = initTeamMode();
 registerTools(server);
 registerPlayTools(server);
 registerAssetTools(server);
+registerAuditTools(server);
 if (team.enabled) registerTeamTools(server);
 
 /** Hard cap on graceful shutdown — a wedged browser must not block exit. */

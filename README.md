@@ -170,6 +170,12 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_asset_note` | Name, categorize, describe, mark good/bad, point a bad name at its replacement |
 | `spawn_asset_preview` | Check existence on the CDN; render images inline so the model can see them |
 
+### Local audit
+| Tool | Purpose |
+|------|---------|
+| `spawn_audit_scan` | List exported functions and say which are auditable without a live room |
+| `spawn_audit_math` | Sweep pure functions across declared input domains and check invariants |
+
 ### Play browser
 | Tool | Purpose |
 |------|---------|
@@ -236,6 +242,67 @@ Paths are classified as `moodboard` (the documented namespaced form), `root` (a 
 **A namespace warning is loud only while the name can still change.** A path that is already generated — or already referenced by a game — cannot be re-rolled, so telling you to rename it is not advice; those collapse to one counted line per kind. A path storage has never seen gets the full recommendation, because that is the only moment it can be acted on.
 
 The design, including what is deliberately not built, is in [ASSET-BANK.md](ASSET-BANK.md).
+
+## Local audit
+
+Reviewing a build is slow because every question gets asked through the same instrument: a
+headed browser, a screenshot, and a judgement call. Plenty of those questions are arithmetic,
+and arithmetic does not need a browser.
+
+Game scripts are plain JS, and the engine injects `objectApi` as a **parameter** rather than an
+import — so a function that does not take `api` cannot reach the engine and runs fine in Node.
+That is the whole basis for these two tools. Neither needs credentials, a push, a live room or
+Chromium.
+
+```
+spawn_audit_scan                     # what can be checked locally, and what needs a room
+spawn_audit_math                     # run audit/math.json
+spawn_audit_math checks=[…]          # try one rule without saving it first
+```
+
+`spawn_audit_scan` classifies by signature: no `api` parameter and no engine-only `require`
+means the function is pure. On a real 77-script game that is 185 of 271 exported functions.
+
+`spawn_audit_math` reads **`audit/math.json` in the game project**, because per-game invariants
+are not knowledge a generic server can hold. This server owns the runner; the game owns the
+assertions — a test runner, and tests.
+
+```json
+{
+  "checks": [
+    {
+      "id": "wave-bodies-all-fit",
+      "module": "scripts/battle-system.js",
+      "export": "planWave",
+      "args": [
+        { "name": "tier", "range": [1, 12] },
+        { "name": "waveInTier", "range": [1, 5] },
+        { "name": "popMult", "values": [1, 1.5, 2, 3] }
+      ],
+      "select": "dropped",
+      "assert": { "finite": true, "max": 0 }
+    }
+  ]
+}
+```
+
+Domains are `range` (with optional `step`), `values`, or `const`. Assertions cover `finite`
+(NaN and Infinity), `integer`, `min`/`max`, the four monotonicity forms (`increasingIn`,
+`nondecreasingIn`, `decreasingIn`, `nonincreasingIn`, naming an argument), and `expr` for
+anything else. `select` pulls a field out of an object result. Failures report the **exact
+arguments** that produced them, so a finding is a line you can paste into a REPL.
+
+On the game this was built against, six checks over 1,020 calls run in **72 ms** and pin a
+formation that does not fit its zone to one wave: `T3.3`.
+
+Two deliberate refusals. A sweep that exceeds its call budget reports `CAPPED from N` rather
+than truncating quietly, because a bounded sweep reported as a full one reads as "covered
+everything". And the engine-only builtins (`fx`, `geom`, `three`, `tsl`, `vibe`,
+`room-routing`, `primitives`) are refused rather than stubbed — a stub lets a check pass
+against behaviour that never ran, which is worse than a check that declines to run.
+
+`module.exports = { … }` helpers are loaded and scanned alongside `export function` ones. Both
+systems are in use, and in practice the pure math lives in the CommonJS half.
 
 ## Development
 

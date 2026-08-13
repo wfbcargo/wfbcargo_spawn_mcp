@@ -2,6 +2,29 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-08-13
+
+Local math audit: run a game's pure functions in plain Node and check declared invariants, with
+no browser, no live room, no push and no credentials. The capture of the existing review that
+motivated it — what it checks today, what it costs, and what is written down nowhere — is in
+[REVIEW.md](REVIEW.md).
+
+The review was not too thorough; it was thorough at the wrong tier. Nineteen of its checks are
+answerable from files on disk, and thirteen of them were being answered through a headed
+browser and a judgement call instead. Math was the worst case: nothing in this repo asked for a
+single numeric check, so that half of every review was re-derived from scratch each session.
+
+### Added
+
+- **`spawn_audit_math`**: sweep exported pure functions across declared input domains and check invariants — `finite` (NaN/Infinity), `integer`, `min`/`max`, four monotonicity forms naming an argument, and `expr` for anything else. `select` reads a field out of an object result. Findings carry the **exact arguments** that produced them. Reads `audit/math.json` from the game project, or inline `checks` for a rule you have not saved yet. Measured on a real 77-script game: 1,020 calls across 6 checks in 72 ms, which pinned a formation that does not fit its zone to one wave out of sixty — a defect invisible in play and instant from a sweep.
+- **`spawn_audit_scan`**: list every exported function and say which are auditable locally. The engine injects `objectApi` as a *parameter* rather than an import, so the signature alone decides: no `api` parameter and no engine-only `require` means the function cannot reach the engine. On that same game, 185 of 271 exported functions.
+- **A script loader that resolves `require` instead of stripping it** (`src/harness.ts`). Handles both module systems in the tree — `export function` behaviours and the `module.exports = { … }` helpers where most pure math actually lives — caches modules, tolerates cycles, and refuses to leave `scripts/` or follow a symlink, matching the compiler's guard. No `--experimental-vm-modules`: there are no `import` statements anywhere in a Spawn game, so nothing needs ES module linking and `vm.Script` is enough.
+
+### Notes
+
+- **Engine-only builtins are refused, not stubbed.** `fx`, `geom`, `three`, `tsl`, `vibe`, `room-routing` and `primitives` report `engine-only` and the check declines to run. A stub would let a check pass against behaviour that never executed, which is worse than not running it. The four documented pure helpers (`math`, `vec3`, `easing`, `format`) are reimplemented locally, and flagged best-effort in `src/builtins.ts` since the engine's own source is not distributed.
+- **A capped sweep says so.** Exceeding the call budget reports `CAPPED from N` rather than truncating quietly, because a bounded sweep reported as a full one reads as "covered everything".
+
 ## [1.5.1] - 2026-08-12
 
 ### Changed
