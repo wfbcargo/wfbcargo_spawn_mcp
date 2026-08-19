@@ -141,7 +141,9 @@ Expect it to take a minute or two: it writes the code, pushes it, opens its own 
 
 On that last one: Spawn ships about 60 "skills", short guides on how the engine actually does terrain, combat, cameras, HUDs, textures, lighting. An assistant that skips them makes things that work but look plain. Telling it to load the skills for the job first is the cheapest quality upgrade there is.
 
-One limit worth knowing: your assistant **cannot generate images or 3D models**. That's Savi's job in the Spawn studio. Your assistant can draw textures in code, write shader-like materials, and build things out of shapes, but when you want a proper conjured model or a generated texture, ask Savi for it in the studio and then tell your assistant to use it.
+On art, your assistant has two lanes and neither one needs you to relay anything. It can make assets itself — naming a `cdn/` path is what brings the model or texture at that path into being — and it can draw textures in code, write shader-like materials, and build things out of shapes. For anything better handed to Savi, or that you want art-directed properly, it can ask Savi directly, and Savi can put several sub-agents on it. You'll see that request appear in your studio chat.
+
+The one thing to know is that nothing comes back the other way. Your assistant can't be told when Savi finished, so it finds out by noticing the game changed — which means it won't sit and wait on Savi, and won't always know which changes were Savi's.
 
 ## Publishing
 

@@ -1,8 +1,8 @@
 /**
- * Text emitted for a builder to start from. Pure on purpose: this is the
- * dispatch affordance, and it hands back a prompt rather than running anything,
- * so ownership of the fleet stays with the LLM instead of moving into this
- * server.
+ * Text emitted for whoever is about to do work — one of our builders
+ * (renderBrief) or Savi (renderHandoff). Pure on purpose: these are the dispatch
+ * affordances, and they hand back a prompt rather than running anything, so
+ * ownership of the fleet stays with the LLM instead of moving into this server.
  */
 import type { TeamAgent } from "./team.js";
 
@@ -89,7 +89,66 @@ export function renderBrief(input: BriefInput): string {
   lines.push(
     "- Pushes serialise and rebase onto head automatically, so a teammate landing work costs you nothing and a 409 is rare. If a rebase collides, your value is kept and theirs is in the .theirs receipt beside the file: reconcile it, delete the receipt, push again."
   );
-  lines.push("- spawn_team_status shows who is where. spawn_savi after meaningful pushes.");
+  lines.push(
+    "- spawn_team_status shows who is where. spawn_savi after meaningful pushes — and hand Savi anything outside your claim with its task argument, since it fans work out across its own sub-agents without needing a key or a worktree of its own. Pass your claims as keepOff. Nothing reports an author, so its pushes look exactly like a teammate's: pull and look before you build on them."
+  );
 
   return lines.join("\n");
+}
+
+export type HandoffInput = {
+  /** What just happened — the context Savi needs regardless of whether work is being handed over. */
+  message: string;
+  /** The work being delegated. Broad and general beats prescriptive: Savi splits it, not you. */
+  task?: string;
+  /** Pin the fan-out width. Omitted means "split it if it splits", which is usually what you want. */
+  subAgents?: number;
+  /** Areas the calling agent owns. Stated, not negotiated — the channel has no reply. */
+  keepOff?: string[];
+  /** Team label, when there is one. Three builders writing "leave that to me" into one chat are otherwise indistinguishable. */
+  label?: string | null;
+};
+
+/** True when this input actually hands work over, rather than only reporting. */
+export function isHandoff(input: Pick<HandoffInput, "task">): boolean {
+  return Boolean(input.task?.trim());
+}
+
+/**
+ * Compose the studio-chat message. Savi reads this channel and can fan a broad
+ * task out across its own sub-agents, so a handoff that names the work and the
+ * boundary buys more than a status line does.
+ *
+ * The channel stays one-way, and that shapes the wording: ownership is declared
+ * rather than asked about, and the note says work will be picked up off head,
+ * so nothing on either side is written expecting an answer that cannot arrive.
+ */
+export function renderHandoff(input: HandoffInput): string {
+  const { message, task, subAgents, label } = input;
+  const keepOff = (input.keepOff ?? []).map((p) => p.trim()).filter(Boolean);
+  const blocks: string[] = [message.trim()];
+  const who = label ? `${label} here. ` : "";
+
+  if (isHandoff(input)) {
+    const ask = [`${who}Please take this on: ${task!.trim()}`];
+    ask.push(
+      subAgents === 1
+        ? "One agent is enough for this — it doesn't split usefully."
+        : subAgents
+          ? `Run it across ${subAgents} sub-agents in parallel, split by area so they don't collide.`
+          : "Fan it out across your sub-agents if it splits cleanly — I'm not blocking on it."
+    );
+    ask.push("No reply channel back to me, so just push as each piece lands and I'll take it off head.");
+    blocks.push(ask.join("\n"));
+  }
+
+  if (keepOff.length) {
+    const mine = isHandoff(input)
+      ? `I'm still working in: ${keepOff.join(", ")}`
+      : `${who}Currently mine: ${keepOff.join(", ")}`;
+    blocks.push(`${mine}. Leave those to me.`);
+  }
+
+  // A blank first block would open the chat message with two empty lines.
+  return blocks.filter(Boolean).join("\n\n");
 }

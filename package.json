@@ -1,6 +1,6 @@
 {
   "name": "spawn-mcp",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Local MCP server for the Spawn Games agent API + Playwright play client",
   "type": "module",
   "bin": {

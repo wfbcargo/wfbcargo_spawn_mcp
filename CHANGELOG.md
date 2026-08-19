@@ -2,6 +2,91 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-08-19
+
+### Changed
+
+- **`spawn_savi` is a delegation channel, not just a status line.** It has always POSTed to the
+  creator's studio chat, and Savi acts on what it reads there — including taking a task on and
+  fanning it out across its own sub-agents, up to 8 in the studio. Nothing about the endpoint
+  changed; what changed is that the server stopped telling the model this was impossible. The
+  1.3.0 entry below claimed "there is no way to hand Savi a task from here", and the session
+  guide said the same in step 8, so agents treated the widest parallelism available to them as a
+  notification channel and built everything themselves instead.
+
+  The tool now takes `task` (the work, stated broadly), `subAgents` (1–8, optional — omitted
+  means "split it as far as it splits", which is usually the better ask), and `keepOff` (the
+  areas the calling agent is still in, so Savi's sub-agents route around it). `renderHandoff`
+  composes those into the chat message; `message` alone still sends exactly what it always did.
+
+  This is cheaper than the alternative it competes with. Another `sbk_` agent costs a one-time
+  key minted by hand inside a 5-minute window, its own worktree and `.spawn/` cache, and a headed
+  Chromium holding a GPU context — which is what caps a local fleet at two or three on Windows,
+  where the windows fight for focus. Savi's sub-agents cost none of that. What it does *not* save
+  is the version rail: Savi's work lands on the same head as everyone else's, which is both how
+  you detect it and why it still has to be pulled and looked at.
+
+  Two things stay true and are now stated as constraints rather than as a dead end: the channel
+  is one-way, so an agent declares its boundary instead of negotiating it and must never wait on
+  a reply that cannot arrive; and delegating broad beats delegating prescriptively, because the
+  decomposition is the part the fan-out is actually good at.
+
+- **The guidance says how a handoff is actually detected, which is by inference.** The first pass
+  told agents to watch for "a head-version bump you did not cause", which reads like a field to
+  look up. There isn't one: `spawn_status` returns `remote.headVersion` and `localBehindHead` and
+  no author anywhere, and the team ledger's `recentPushes` only records our own agents. So an
+  unexplained bump is Savi, the creator, or a teammate, and only the ledger separates the third
+  from the first two. Every surface now says that outright, and two rules follow from it that
+  were missing: **never put a delegated task on your critical path** (nothing reports that it was
+  even picked up, so anything sequenced behind it stalls indefinitely), and **screenshot what
+  lands before building on it** — the "a successful push proves the spec parsed and nothing more"
+  rule applies to work that arrives on your rail exactly as it applies to your own.
+
+- **The best handoff target is named, and it is not "art".** An agent makes art perfectly well by
+  naming a `cdn/` path — that is 1.5.0's correction and it stands. The real asymmetry is narrower:
+  a path is spent on first fetch and cannot be re-rolled, so a look that needs more than one
+  attempt, or that the creator wants to steer, is worth handing to Savi, who can try it again with
+  them in the loop. "What should I delegate?" now has that answer instead of "something
+  separable". `keepOff` is also tied to team claims, since an agent in team mode already holds
+  exactly the patterns it should be passing.
+
+- **The session guide, the team brief, and the multi-agent docs count Savi as capacity.** Step 8
+  of `SESSION_GUIDE` now says to hand separable slices over rather than only reporting on them,
+  and to notice the result as a head-version bump the agent did not cause. `spawn_team_brief`
+  tells builders to route anything outside their claim to Savi. README gained a **Delegating to
+  Savi** section, and TEAM-MODE's "no inter-agent chat bus" non-goal is narrowed: dispatch out
+  works, nothing comes back.
+
+### Fixed
+
+- **A whitespace-only `task` reported a handoff that was never sent.** `renderHandoff` gates the
+  ask on `task.trim()`; the handler's result note gated on bare truthiness. So `task: "   "`
+  composed a message with no request in it and still told the model work was in flight — and the
+  new guidance tells it not to go checking. Both now gate on one exported `isHandoff`.
+
+- **`subAgents: 1` asked Savi to do the opposite.** The schema advertises 1 as meaningful, but the
+  branch was `subAgents > 1`, so pinning the width to one fell through to "fan it out across your
+  sub-agents if it splits cleanly". 1 now asks for no split at all.
+
+- **A handoff did not say who sent it.** In team mode several builders write into the same studio
+  chat, and every one of them said "leave those to me" with nothing attached — which makes
+  `keepOff` unroutable in precisely the mode it exists for. The composed message now carries the
+  team label when there is one.
+
+- **Input validation matched the description but not the repo's own pattern.** `message` accepted
+  the empty string (POSTing an empty studio-chat message and reporting `ok`), and `keepOff`
+  accepted blank patterns, rendering "Currently mine: ,  .". `message` is now `.min(1)`, `keepOff`
+  items are `.min(1)` and trimmed, and an empty leading block can no longer open a message with
+  two blank lines. `sent` is omitted from the result when nothing was composed in, rather than
+  billing the model to read back its own sentence.
+
+- **GETTING-STARTED said the assistant cannot generate images or 3D models.** Two releases stale:
+  1.5.0 established that naming a `cdn/` path *is* the generation lane and corrected the session
+  guide, but this file still told creators to fetch art from Savi themselves and hand it over.
+  It now describes both lanes the assistant actually has, plus the one thing a creator genuinely
+  needs to know about the new channel — that no completion signal comes back, so their assistant
+  will not wait on Savi and will not always know which changes were Savi's.
+
 ## [1.6.0] - 2026-08-13
 
 Local math audit: run a game's pure functions in plain Node and check declared invariants, with

@@ -214,9 +214,12 @@ fix.
   LLM, which is the opposite of the point.
 - **Publishing.** There is no agent publish API. The creator publishes in the UI before the team
   starts; agents only read `mode=live`.
-- **An inter-agent chat bus.** `spawn_savi` is one-way into the creator's studio chat with no
-  reply channel. Cross-agent messaging is the conductor's context, which is where the ownership
-  is supposed to sit anyway.
+- **An inter-agent chat bus.** `spawn_savi` writes into the creator's studio chat and Savi can
+  act on what it reads there — a `task` gets picked up and fanned out across Savi's own
+  sub-agents — but nothing comes back: no reply, no acknowledgement, no completion event. So it
+  is a dispatch channel, not a bus. An agent states its boundary rather than negotiating it, and
+  learns the work landed by seeing head move. Cross-agent messaging between *our* agents stays
+  the conductor's context, which is where the ownership is supposed to sit anyway.
 - **Enforcement.** Claims are advisory. The server cannot stop a determined agent from editing a
   claimed file and should not pretend otherwise.
 

@@ -47,8 +47,8 @@ bytes; duplicating them locally would create a second source of truth for
 something already immutable and globally addressed.
 
 **Is not:** a generation lane. Naming is how assets get made, and that happens
-when a game client fetches the path. This server records names; it does not
-commission art.
+when a game client fetches the path. These tools record names; they do not
+commission art — `spawn_savi` is the one that does, by handing the job to Savi.
 
 ## Storage
 

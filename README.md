@@ -80,7 +80,7 @@ Same creator account needs **no crew setup**. Each agent gets its own key (setti
 1. **Publish in the Spawn UI** before unleashing agents. Published (`mode=live`) stays stable for players while agents mutate dev head. There is no agent publish API; agents only *read* live via `spawn_latest` / `spawn_status`.
 2. **One project dir (or worktree) per agent.** A shared `SPAWN_PROJECT_DIR` will thrash `game.json`, scripts, and `.spawn/base-version`. Same `SPAWN_VARIANT_ID` for everyone. Credentials resolve from the project's own `.env` first, so a git worktree each (`.env` and `.spawn/` are untracked) is what makes them separate connections. A key in the MCP config env is only a fallback for projects that carry none.
 3. Start with **2 to 3 agents**, partition script/area ownership, treat **409 `version_conflict`** as normal: `spawn_latest` → merge `.theirs` → push.
-4. Label bootstraps (`terrain-agent`, …) and call **`spawn_savi`** after meaningful pushes.
+4. Label bootstraps (`terrain-agent`, …) and call **`spawn_savi`** after meaningful pushes — with `task` to hand Savi a slice outright, since it fans work out across its own sub-agents (up to 8) with no key, worktree, or GPU cost on your side. Cheapest capacity available; see [Delegating to Savi](#delegating-to-savi).
 
 ```
 spawn_status                 # head vs published, local base, .theirs, credential source
@@ -88,6 +88,23 @@ spawn_latest                 # pull head (conflict recovery)
 spawn_latest mode=live       # inspect published (no local write)
 spawn_latest mode=live applyLocal=true   # reset local to published snapshot
 ```
+
+### Delegating to Savi
+
+`spawn_savi` writes into the creator's studio chat, and Savi acts on what it reads there. Pass `task` and it can pick the work up and fan it out across **its own sub-agents — up to 8**, none of which cost you a bootstrap key, a worktree, a checkout, or a headed Chromium holding a GPU context. Compared to standing up another `sbk_` agent it is free capacity, and it is the widest parallelism reachable from this server.
+
+```
+spawn_savi
+  message:   "Pushed v12: parkour course in the north canyon."
+  task:      "Give the canyon a night pass — lighting, ambient audio, and whatever set dressing sells it."
+  subAgents: 4                                  # optional; omit to let Savi split it as far as it splits
+  keepOff:   ["scripts/player/**", "world.terrain"]
+```
+
+Two rules make it work:
+
+- **Delegate broad, not prescriptive.** "Give the canyon a night pass" splits across sub-agents; a numbered list of edits does not. The decomposition is the part Savi's fan-out is good at, so a narrow task spends 8 agents on a job for one.
+- **Never wait on it.** The channel is one-way — no reply, no acknowledgement, no completion event. Declare your boundary with `keepOff` instead of asking for one, keep building your own area, and notice the work arriving as a head-version bump you did not cause (`spawn_status`), then `spawn_latest` to take it.
 
 ### Team mode
 
@@ -158,7 +175,7 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_latest` | Pull head / published / version / updateSlug (+ script sync) |
 | `spawn_validate` / `spawn_push` | Compile + schema check / live push |
 | `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect (needs a live room; no SQL) |
-| `spawn_savi` | Background context for Savi |
+| `spawn_savi` | Context for Savi, or hand it a task to fan out across its sub-agents |
 | `spawn_revoke` / `spawn_status` | Disconnect / local + head/published health |
 
 ### Asset bank

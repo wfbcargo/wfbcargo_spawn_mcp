@@ -27,6 +27,7 @@ import {
   writeBaseScripts,
   writeBaseVersion,
 } from "./compile.js";
+import { isHandoff, renderHandoff } from "./brief.js";
 import { resolveApiUrl } from "./config.js";
 import { SESSION_GUIDE } from "./session.js";
 import {
@@ -999,23 +1000,69 @@ export function registerTools(server: McpServer): void {
     "spawn_savi",
     {
       description:
-        "Leave background context for Savi (the creator's in-game AI companion) after meaningful pushes so you don't fight over the world.",
+        "Write into the creator's studio chat, where Savi (their in-game AI companion) reads it. Two uses, and the second is the valuable one. (1) Context after a meaningful push, so you don't fight over the world. (2) HAND OFF WORK: pass `task` and Savi can take it on, fanning it out across its own sub-agents — up to 8 in the studio, needing no bootstrap key, worktree, or browser of its own. The strongest targets are the ones where your own lane is weakest: you make art by naming a cdn/ path, and that path is spent on first fetch and cannot be re-rolled, so art that needs iterating — or that the creator wants to steer — is better handed to Savi, who can try it again with them in the loop. Delegate BROAD and GENERAL (\"build out the northern district\"), never as a step list — the splitting is what the fan-out is good at, and a narrow task wastes it. NOTHING COMES BACK: no reply, no acknowledgement, no completion event, and no endpoint on this API reports who pushed. So declare your boundary with `keepOff` rather than asking for one; never put a delegated task on your own critical path, since you cannot tell whether it was even picked up; and detect the result by inference rather than by reading a field — head moving past your own last push (spawn_status `remote.headVersion`) is Savi or the creator, and in team mode spawn_team_status `recentPushes` is what rules out a teammate. Then spawn_latest to take it and LOOK at it: work arriving on your rail is unverified until you screenshot it, exactly like your own.",
       inputSchema: {
         message: z
           .string()
-          .describe('e.g. "Pushed v12: parkour course in the north canyon. Atmosphere untouched if you want it."'),
+          .min(1)
+          .describe('What just happened, e.g. "Pushed v12: parkour course in the north canyon. Atmosphere untouched if you want it."'),
+        task: z
+          .string()
+          .optional()
+          .describe(
+            'Work to hand over, stated broadly, e.g. "Give the north canyon a night pass — lighting, ambient audio, and whatever set dressing sells it." Omit for a pure status note.'
+          ),
+        subAgents: z
+          .number()
+          .int()
+          .min(1)
+          // Mirrors the studio UI's fan-out limit, not a server constraint: the
+          // number never reaches an endpoint, it ends up as prose in the chat.
+          .max(8)
+          .optional()
+          .describe(
+            "Pin how wide Savi should fan the task out (the studio allows up to 8; 1 asks it NOT to split). Omit to let Savi split it as far as it splits, which is usually the better ask."
+          ),
+        keepOff: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            'Areas you are still working in, so Savi routes its sub-agents around you, e.g. ["scripts/player/**", "world.terrain"]. Advisory — the same trust model as spawn_team_claim.'
+          ),
         projectDir: projectDirSchema,
       },
     },
-    async ({ message, projectDir }) => {
+    async ({ message, task, subAgents, keepOff, projectDir }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const { status, json } = await api(env, "POST", variantPath(env, "/studio-chat/notify"), {
+      // Three builders writing "leave that to me" into one studio chat are
+      // indistinguishable without this, which would make keepOff unroutable in
+      // exactly the mode it exists for.
+      const composed = renderHandoff({
         message,
+        task,
+        subAgents,
+        keepOff,
+        label: teamContext(dir)?.label ?? null,
+      });
+      const { status, json } = await api(env, "POST", variantPath(env, "/studio-chat/notify"), {
+        message: composed,
       });
       if (status !== 200) return err(`savi failed (${status}): ${json?.error}`);
-      return text({ ok: true, note: "Sent — Savi will see it as background context." });
+      // Gate on the same predicate renderHandoff uses: a whitespace-only task
+      // composes no ask, and reporting one would leave the model waiting on
+      // work it never actually requested.
+      const handedOff = isHandoff({ task });
+      return text({
+        ok: true,
+        // Echoing back a bare status note just bills the model for its own
+        // sentence; worth showing only when this composed something in.
+        ...(composed === message.trim() ? {} : { sent: composed }),
+        note: handedOff
+          ? "Handed off. Nothing acknowledges a task on this channel and no endpoint reports an author, so don't wait on it and don't sequence anything behind it. Keep building your own area; read the work landing as spawn_status remote.headVersion moving past your own last push (in team mode, spawn_team_status recentPushes rules out a teammate). Then spawn_latest to take it, and screenshot it before building on top — it is unverified until you look."
+          : "Sent — Savi will see it as background context.",
+      });
     }
   );
 
