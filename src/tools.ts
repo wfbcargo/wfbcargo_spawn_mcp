@@ -28,8 +28,10 @@ import {
   writeBaseVersion,
 } from "./compile.js";
 import { isHandoff, renderHandoff } from "./brief.js";
+import { countWispsOnScreen, getSession, readStudio } from "./browser.js";
 import { resolveApiUrl } from "./config.js";
 import { SESSION_GUIDE } from "./session.js";
+import { renderFleetLine, summarizeFleet } from "./wisps.js";
 import {
   agentFor,
   appendPush,
@@ -1000,7 +1002,7 @@ export function registerTools(server: McpServer): void {
     "spawn_savi",
     {
       description:
-        "Write into the creator's studio chat, where Savi (their in-game AI companion) reads it. Two uses, and the second is the valuable one. (1) Context after a meaningful push, so you don't fight over the world. (2) HAND OFF WORK: pass `task` and Savi can take it on, fanning it out across its own sub-agents — up to 8 in the studio, needing no bootstrap key, worktree, or browser of its own. The strongest targets are the ones where your own lane is weakest: you make art by naming a cdn/ path, and that path is spent on first fetch and cannot be re-rolled, so art that needs iterating — or that the creator wants to steer — is better handed to Savi, who can try it again with them in the loop. Delegate BROAD and GENERAL (\"build out the northern district\"), never as a step list — the splitting is what the fan-out is good at, and a narrow task wastes it. NOTHING COMES BACK: no reply, no acknowledgement, no completion event, and no endpoint on this API reports who pushed. So declare your boundary with `keepOff` rather than asking for one; never put a delegated task on your own critical path, since you cannot tell whether it was even picked up; and detect the result by inference rather than by reading a field — head moving past your own last push (spawn_status `remote.headVersion`) is Savi or the creator, and in team mode spawn_team_status `recentPushes` is what rules out a teammate. Then spawn_latest to take it and LOOK at it: work arriving on your rail is unverified until you screenshot it, exactly like your own.",
+        "Write into the creator's studio chat, where Savi (their in-game AI companion) reads it. Two uses, and the second is the valuable one. (1) Context after a meaningful push, so you don't fight over the world. (2) HAND OFF WORK: pass `task` and Savi can take it on, fanning it out across its own sub-agents — up to 8 in the studio, needing no bootstrap key, worktree, or browser of its own. Check spawn_savi_status first: it counts the lanes already burning, and every idle one is a sub-agent that would be finishing work while you build. The strongest targets are the ones where your own lane is weakest: you make art by naming a cdn/ path, and that path is spent on first fetch and cannot be re-rolled, so art that needs iterating — or that the creator wants to steer — is better handed to Savi, who can try it again with them in the loop. Delegate BROAD and GENERAL (\"build out the northern district\"), never as a step list — the splitting is what the fan-out is good at, and a narrow task wastes it. NOTHING COMES BACK: no reply, no acknowledgement, no completion event, and no endpoint on this API reports who pushed. So declare your boundary with `keepOff` rather than asking for one, and never put a delegated task on your own critical path. Uptake is visible even though acknowledgement is not: spawn_savi_status shows a new wisp lighting up and what Savi has it doing, which tells you the fan-out started — not that it started on YOUR task, since nothing here reports an author. Detect the finished work by inference rather than by reading a field — head moving past your own last push (spawn_status `remote.headVersion`) is Savi or the creator, and in team mode spawn_team_status `recentPushes` is what rules out a teammate. Then spawn_latest to take it and LOOK at it: work arriving on your rail is unverified until you screenshot it, exactly like your own.",
       inputSchema: {
         message: z
           .string()
@@ -1054,13 +1056,22 @@ export function registerTools(server: McpServer): void {
       // composes no ask, and reporting one would leave the model waiting on
       // work it never actually requested.
       const handedOff = isHandoff({ task });
+      // Composed after the POST so the numbers describe the fleet this task is
+      // landing in. Best effort: no play session means no wisps to read, which
+      // is a reason to open one rather than an error.
+      const fleet = summarizeFleet({
+        snapshot: readStudio(),
+        onScreen: getSession() ? await countWispsOnScreen() : null,
+        sessionOpen: getSession() !== null,
+      });
       return text({
         ok: true,
         // Echoing back a bare status note just bills the model for its own
         // sentence; worth showing only when this composed something in.
         ...(composed === message.trim() ? {} : { sent: composed }),
+        ...(handedOff ? { savi: renderFleetLine(fleet) } : {}),
         note: handedOff
-          ? "Handed off. Nothing acknowledges a task on this channel and no endpoint reports an author, so don't wait on it and don't sequence anything behind it. Keep building your own area; read the work landing as spawn_status remote.headVersion moving past your own last push (in team mode, spawn_team_status recentPushes rules out a teammate). Then spawn_latest to take it, and screenshot it before building on top — it is unverified until you look."
+          ? "Handed off. Nothing acknowledges a task on this channel and no endpoint reports an author, so don't wait on it and don't sequence anything behind it. Keep building your own area. Watch it start with spawn_savi_status — a wisp lighting up is Savi taking work on — and read the work landing as spawn_status remote.headVersion moving past your own last push (in team mode, spawn_team_status recentPushes rules out a teammate). Then spawn_latest to take it, and screenshot it before building on top — it is unverified until you look."
           : "Sent — Savi will see it as background context.",
       });
     }

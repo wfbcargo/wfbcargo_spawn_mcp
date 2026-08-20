@@ -3,12 +3,14 @@ import { z } from "zod";
 import { join } from "node:path";
 import {
   closePlay,
+  countWispsOnScreen,
   DEFAULT_SHOT_FORMAT,
   DEFAULT_SHOT_QUALITY,
   evaluate,
   getSession,
   openPlay,
   readConsole,
+  readStudio,
   reload,
   resolvePlayUrl,
   runInputs,
@@ -18,6 +20,7 @@ import {
 } from "./browser.js";
 import { resolveProjectDir } from "./env.js";
 import { latchProject } from "./team.js";
+import { renderFleetLine, summarizeFleet, type FleetReport } from "./wisps.js";
 
 function text(data: unknown) {
   const body = typeof data === "string" ? data : JSON.stringify(data, null, 2);
@@ -111,6 +114,18 @@ const inputActionSchema = z.discriminatedUnion("type", [
     delayMs: z.number().optional(),
   }),
 ]);
+
+/**
+ * Read Savi's fan-out from the open play session. Both readings are best
+ * effort and neither is required: the answer degrades from "what all eight
+ * sub-agents are doing" to "how many flames are on screen" to "no session",
+ * and each of those is still an answer.
+ */
+async function readFleet(): Promise<FleetReport> {
+  const sessionOpen = getSession() !== null;
+  const onScreen = sessionOpen ? await countWispsOnScreen() : null;
+  return summarizeFleet({ snapshot: readStudio(), onScreen, sessionOpen });
+}
 
 export function registerPlayTools(server: McpServer): void {
   server.registerTool(
@@ -330,6 +345,22 @@ export function registerPlayTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "spawn_savi_status",
+    {
+      description:
+        "How many sub-agents Savi is running right now, and what they are doing. Savi's fan-out is EIGHT lanes wide, and this is the only way to see how much of it is spoken for — no API endpoint reports it. Call it BEFORE spawn_savi to size a handoff, and after one to see whether it was picked up. Idle lanes are the finding worth acting on: they are parallelism that costs you nothing and finishes work while you build, so free lanes mean you should be delegating a broader slice, not building it yourself. Reads the open play session (spawn_play_open) — the wisps are the flames along the top of the play page, one per sub-agent, and the studio broadcasts what each is working on to that same page. Attribution still does not exist: this shows that Savi is busy and on what, never that the work is yours.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return text(await readFleet());
+      } catch (e: any) {
+        return err(String(e?.message ?? e));
+      }
+    }
+  );
+
+  server.registerTool(
     "spawn_play_close",
     {
       description: "Close the Playwright Chromium session.",
@@ -344,7 +375,8 @@ export function registerPlayTools(server: McpServer): void {
   server.registerTool(
     "spawn_play_status",
     {
-      description: "Whether a play browser session is open, its URL, headed mode, recent error count.",
+      description:
+        "Whether a play browser session is open, its URL, headed mode, recent error count, and a one-line read of Savi's fleet (spawn_savi_status has the detail).",
       inputSchema: {},
     },
     async () => {
@@ -359,6 +391,9 @@ export function registerPlayTools(server: McpServer): void {
         playUrl: sess.playUrl,
         pageUrl: sess.page.url(),
         headed: sess.headed,
+        // One line, because this page is already showing you Savi's fleet
+        // whether or not you asked. spawn_savi_status has the detail.
+        savi: renderFleetLine(await readFleet()),
         recentErrors: errors,
       });
     }

@@ -218,8 +218,11 @@ fix.
   act on what it reads there — a `task` gets picked up and fanned out across Savi's own
   sub-agents — but nothing comes back: no reply, no acknowledgement, no completion event. So it
   is a dispatch channel, not a bus. An agent states its boundary rather than negotiating it, and
-  learns the work landed by seeing head move. Cross-agent messaging between *our* agents stays
-  the conductor's context, which is where the ownership is supposed to sit anyway.
+  learns the work landed by seeing head move. `spawn_savi_status` narrows that gap without
+  closing it: reading the wisps on the play page shows how many of Savi's eight sub-agents are
+  burning and what each is doing, which is uptake and capacity — never a reply, and never an
+  author. Cross-agent messaging between *our* agents stays the conductor's context, which is
+  where the ownership is supposed to sit anyway.
 - **Enforcement.** Claims are advisory. The server cannot stop a determined agent from editing a
   claimed file and should not pretend otherwise.
 

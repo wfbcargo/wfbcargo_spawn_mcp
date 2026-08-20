@@ -143,7 +143,9 @@ On that last one: Spawn ships about 60 "skills", short guides on how the engine 
 
 On art, your assistant has two lanes and neither one needs you to relay anything. It can make assets itself — naming a `cdn/` path is what brings the model or texture at that path into being — and it can draw textures in code, write shader-like materials, and build things out of shapes. For anything better handed to Savi, or that you want art-directed properly, it can ask Savi directly, and Savi can put several sub-agents on it. You'll see that request appear in your studio chat.
 
-The one thing to know is that nothing comes back the other way. Your assistant can't be told when Savi finished, so it finds out by noticing the game changed — which means it won't sit and wait on Savi, and won't always know which changes were Savi's.
+Savi works up to eight of these sub-agents at once, and your assistant can now see how many are going: those are the little flames along the top of the game page, one per sub-agent. It reads them out of the browser window it already has open, so it can tell whether Savi has room for more before handing anything over — and so an idle Savi is something it notices rather than something it has to guess at.
+
+The one thing to know is that nothing comes back the other way. Your assistant can't be told when Savi finished, so it finds out by noticing the game changed — which means it won't sit and wait on Savi, and won't always know which changes were Savi's. Seeing a flame light up tells it Savi picked *something* up; it doesn't prove that something was its request.
 
 ## Publishing
 
