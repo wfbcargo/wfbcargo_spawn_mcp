@@ -80,7 +80,7 @@ Same creator account needs **no crew setup**. Each agent gets its own key (setti
 1. **Publish in the Spawn UI** before unleashing agents. Published (`mode=live`) stays stable for players while agents mutate dev head. There is no agent publish API; agents only *read* live via `spawn_latest` / `spawn_status`.
 2. **One project dir (or worktree) per agent.** A shared `SPAWN_PROJECT_DIR` will thrash `game.json`, scripts, and `.spawn/base-version`. Same `SPAWN_VARIANT_ID` for everyone. Credentials resolve from the project's own `.env` first, so a git worktree each (`.env` and `.spawn/` are untracked) is what makes them separate connections. A key in the MCP config env is only a fallback for projects that carry none.
 3. Start with **2 to 3 agents**, partition script/area ownership, treat **409 `version_conflict`** as normal: `spawn_latest` → merge `.theirs` → push.
-4. Label bootstraps (`terrain-agent`, …) and call **`spawn_savi`** after meaningful pushes — with `task` to hand Savi a slice outright, since it fans work out across its own sub-agents (up to 8) with no key, worktree, or GPU cost on your side. Cheapest capacity available; see [Delegating to Savi](#delegating-to-savi).
+4. Label bootstraps (`terrain-agent`, …) and call **`spawn_savi`** after meaningful pushes — with `task` to hand Savi a slice outright, since it fans work out across its own sub-agents (up to 8) with no key, worktree, or GPU cost on your side. Cheapest capacity available, and `spawn_savi_status` tells you how much of it is idle; see [Delegating to Savi](#delegating-to-savi).
 
 ```
 spawn_status                 # head vs published, local base, .theirs, credential source
@@ -106,6 +106,23 @@ Two rules make it work:
 - **Delegate broad, not prescriptive.** "Give the canyon a night pass" splits across sub-agents; a numbered list of edits does not. The decomposition is the part Savi's fan-out is good at, so a narrow task spends 8 agents on a job for one.
 - **Never wait on it.** The channel is one-way — no reply, no acknowledgement, no completion event. Declare your boundary with `keepOff` instead of asking for one, keep building your own area, and notice the work arriving as a head-version bump you did not cause (`spawn_status`), then `spawn_latest` to take it.
 
+#### Seeing the fleet
+
+`spawn_savi_status` answers the question that makes the rest of this actionable: **how many of the 8 lanes are burning right now.**
+
+```
+spawn_savi_status
+  → Savi's fleet: 4/8 wisps burning — 4 lanes free
+    workingOn: ["Sent wisp to rebuild the nine set pieces out of real geometry", …]
+    advice: "4 of 8 lanes are idle. That is 4 sub-agents you are not using…"
+```
+
+The wisps are the little flames along the top of the play page — one per sub-agent, eight slots. No endpoint reports them, so this reads the play client you already have open (`spawn_play_open`): the studio broadcasts its state to that page, and the server keeps the latest broadcast plus a direct count of the flames on screen. Two readings of the same thing, so the count survives either one changing shape.
+
+Use it in both directions. **Before** a handoff it sizes the slice — eight idle lanes is a bigger ask than one. **After** one, a new wisp lighting up is uptake, which is as close to an acknowledgement as this channel gets. It still reports no author: a burning wisp means Savi is busy and on what, never that it is busy on *your* task.
+
+Idle lanes are the finding worth acting on. They are parallelism nobody had to key, check out, or supervise, and an agent building serially past four of them is choosing the slow route to the same place.
+
 ### Team mode
 
 Opt-in bookkeeping for the above. Set `SPAWN_TEAM=1` in the first session's MCP config and run `spawn_team_init` in each agent's worktree. That writes a roster into the repo's shared `.git/spawn-team/`, which every worktree finds with no configuration and nobody can commit by accident, so later sessions pick the mode up on their own and need no extra config.
@@ -127,7 +144,7 @@ Four behaviours change while it is on:
 
 Claim `game.json` key paths (`entities.player`, `world.terrain`) and script globs (`scripts/hud/**`). Everything except `scripts/**` is claimed by key path, because `spawn_init` puts the whole spec in `game.json`; a `world/foo.json`-style pattern is rejected rather than silently never matching.
 
-Solo, none of this exists: the tool list stays at 32, nothing latches, and pushes take no lock.
+Solo, none of this exists: the tool list stays at 35, nothing latches, and pushes take no lock.
 
 Adding an agent is two calls plus one command you run yourself:
 
@@ -176,6 +193,7 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_validate` / `spawn_push` | Compile + schema check / live push |
 | `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect (needs a live room; no SQL) |
 | `spawn_savi` | Context for Savi, or hand it a task to fan out across its sub-agents |
+| `spawn_savi_status` | How many of Savi's 8 sub-agents are running, and on what (needs a play session) |
 | `spawn_revoke` / `spawn_status` | Disconnect / local + head/published health |
 
 ### Asset bank
@@ -202,7 +220,7 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_play_reload` | Hard reload if the client didn't reshape |
 | `spawn_play_console` | Page console / pageerror |
 | `spawn_play_eval` | Top-frame page JS only; cannot see or click game UI |
-| `spawn_play_status` / `spawn_play_close` | Session health / teardown |
+| `spawn_play_status` / `spawn_play_close` | Session health (incl. a one-line fleet read) / teardown |
 
 Also: **`spawn_session`** prompt with the full loop (including multi-agent). `spawn_getting_started` returns the same text as a tool call, because most clients never surface prompts to the model.
 

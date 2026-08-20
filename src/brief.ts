@@ -92,6 +92,9 @@ export function renderBrief(input: BriefInput): string {
   lines.push(
     "- spawn_team_status shows who is where. spawn_savi after meaningful pushes — and hand Savi anything outside your claim with its task argument, since it fans work out across its own sub-agents without needing a key or a worktree of its own. Pass your claims as keepOff. Nothing reports an author, so its pushes look exactly like a teammate's: pull and look before you build on them."
   );
+  lines.push(
+    "- spawn_savi_status counts how many of Savi's eight sub-agents are burning right now (the wisps on your play page). Idle lanes there are the cheapest capacity on this build — nobody had to key or check them out — so read a low number as work you should be handing over rather than queueing behind yourself."
+  );
 
   return lines.join("\n");
 }

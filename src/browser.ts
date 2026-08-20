@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page } from "playwright";
 import { api, variantPath } from "./client.js";
 import { loadEnv, requireEnv, resolveProjectDir } from "./env.js";
+import { projectStudioFrame, type StudioSnapshot } from "./wisps.js";
 
 export type ConsoleEntry = {
   type: string;
@@ -19,11 +20,28 @@ type Session = {
   console: ConsoleEntry[];
   /** Whether the canvas has already been click-focused for this session. */
   canvasFocused: boolean;
+  /** Latest studio state seen on this page — Savi's running sub-agents. */
+  studio: StudioSnapshot | null;
 };
 
 let session: Session | null = null;
 
 const MAX_CONSOLE = 200;
+
+/**
+ * The studio's own socket, among the several this page opens. The others are
+ * the realtime backend and the game room, and the room's traffic is binary
+ * engine state we have no business decoding.
+ */
+const STUDIO_SOCKET = /studio-chat/i;
+
+/**
+ * Wisps live in the page's top frame, one hotspot each, inside the stage.
+ * Scoping to the stage matters: the play page also draws three decorative
+ * `aria-label="wisp"` canvases inside its "hidden gaming GPU" prompt, and
+ * counting those reports a fleet that does not exist.
+ */
+const WISP_HOTSPOT = "[data-wisp-stage] [data-wisp-hotspot]";
 
 /**
  * Serializes everything that touches the single browser session. MCP clients
@@ -140,7 +158,33 @@ async function openPlayUnlocked(opts: {
     headed,
     console: consoleBuf,
     canvasFocused: false,
+    studio: null,
   };
+  const mine = session;
+
+  // Attached before navigation, because these events only fire for sockets
+  // opened after the listener exists. Page-level rather than injected: the
+  // studio socket is not created through the main world's WebSocket, so
+  // wrapping that constructor never sees it.
+  page.on("websocket", (ws) => {
+    if (!STUDIO_SOCKET.test(ws.url())) return;
+    ws.on("framereceived", (frame) => {
+      const payload = frame.payload;
+      // 0x7b is "{" — the studio sends JSON state, and anything else on this
+      // socket is not ours to parse. A stray frame must never kill a session.
+      if (typeof payload !== "string" || payload.charCodeAt(0) !== 0x7b) return;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const next = projectStudioFrame(raw, Date.now());
+      // A frame from a page we have since replaced must not overwrite the
+      // live session's view of the fleet.
+      if (next && session === mine) mine.studio = next;
+    });
+  });
 
   page.on("console", (msg: ConsoleMessage) => {
     pushConsole({
@@ -381,6 +425,34 @@ export function readConsole(opts?: {
   }
   const limit = opts?.limit ?? 50;
   return entries.slice(-limit);
+}
+
+/** Last studio state broadcast to the open play page, if any. */
+export function readStudio(): StudioSnapshot | null {
+  return session?.studio ?? null;
+}
+
+/**
+ * Count the wisps drawn on the play page right now.
+ *
+ * Deliberately a count and nothing more — reading what each wisp is doing
+ * means hovering it, and this server does not move the mouse to observe
+ * anything: a stray pointer swings the camera in any mouse-look game.
+ */
+export function countWispsOnScreen(): Promise<number | null> {
+  return withSession(async () => {
+    if (!session) return null;
+    try {
+      return await session.page.evaluate(
+        (selector) => document.querySelectorAll(selector).length,
+        WISP_HOTSPOT
+      );
+    } catch {
+      // Mid-navigation, or a page with no stage. Not knowing is a valid answer
+      // here; the socket snapshot may still carry the fleet.
+      return null;
+    }
+  });
 }
 
 export function evaluate(script: string): Promise<unknown> {

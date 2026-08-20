@@ -2,6 +2,107 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-08-20
+
+### Added
+
+- **`spawn_savi_status` — how many sub-agents Savi is running right now.** 1.7.0 turned
+  `spawn_savi` into a delegation channel and told agents Savi's fan-out is eight wide, but left
+  them with no way to see how much of it was already spoken for. An agent could hand over a slice
+  into a full fleet, or build serially past eight idle sub-agents, and could not tell the two
+  situations apart. This is that measurement.
+
+  The number is legible in exactly one place: the play page an agent already keeps open. The
+  studio broadcasts its whole state to that page over a websocket, and the wisps — the little
+  flames along the top — are its visible form, one per sub-agent. There is no API for it; every
+  studio-chat `GET` on the agent API is a 404, which is why this reads a browser rather than an
+  endpoint.
+
+  Two readings, deliberately, because neither format belongs to us. The server keeps the latest
+  state frame off the socket (Playwright's own websocket events — the socket is not created
+  through the page's `WebSocket` constructor, so injecting a wrapper never sees it), and counts
+  the wisp hotspots in the DOM directly. The frame says what each sub-agent is working on; the
+  count says how many there are. They agree, and either one alone still answers the question, so
+  the tool degrades from full detail to a bare count to "no play session" rather than breaking.
+
+  The state frame is kilobytes — chat history, command list, and the full prompt text of every
+  task Savi was given — so it is projected down to titles and one-line summaries at the point of
+  capture, before any of it can reach a model's context.
+
+  Reported: `busy`/`free` against the 8 lanes, what each burning wisp is doing, weaves still in
+  flight with their lane roll-up, and the most recent finish. `spawn_play_status` carries a
+  one-line version, and `spawn_savi` reports the fleet its handoff just landed in.
+
+- **`savi-conductor` skill — a capacity-gated delegation loop over a whole build.** The wisp
+  count is only worth reading if something acts on it; this is the something. It is a Claude Code
+  skill (`.claude/skills/savi-conductor/`) that runs the loop a builder would otherwise run by
+  hand: maintain a durable, git-tracked wiki of intent, fan broad slices out to Savi whenever
+  `spawn_savi_status` shows free lanes, build one lane itself, and verify what lands by looking at
+  it. It self-paces — each tick picks its own next wake time from how full the fleet is.
+
+  The design turns on the same fact `spawn_savi` does: the channel is one-way, so the wiki *is*
+  the reply channel, holding the half of the conversation the API refuses to return. The loop
+  reconstructs completion by inference and is deliberately conservative about it — a head bump is
+  a prompt to look, never a verdict; a task leaves the verify queue on a screenshot matching its
+  stated intent, not on a version moving; the conductor logs its own pushes so it never credits
+  its own head bump to a Savi task; and a dispatched task is held for minutes on real evidence
+  before it is ever re-sent, because nothing reports which wisp owns which task.
+
+  **How to use it**
+
+  1. **Have a game project open** with working spawn-mcp credentials (`spawn_status` green), and
+     an idea of what you want built — notes, a design doc, or a previous wiki to ingest.
+  2. **Start the loop** with the interval omitted, so it self-paces:
+
+     ```
+     /loop /savi-conductor
+     ```
+
+     The first tick **bootstraps the wiki** at `docs/savi-wiki/` (git-tracked): `vision.md` for
+     the pillars, `areas/*.md` per subsystem, `backlog.md` for the work as broad `ready` slices,
+     `log.md` as the reconcile trail, and `index.md` as the traversable re-entry map. It also
+     opens a headed play client — the loop's wisp sensor and screenshot verifier are the same
+     window — and picks one area as the conductor's own lane. If the backlog comes up empty (no
+     pillars, nothing to ingest) it says what it needs and stops rather than spinning.
+  3. **Each tick thereafter** it senses the fleet, drains the verify queue (pull + screenshot
+     each landed intent), fills every free lane with the broadest ready slices (`keepOff` = its
+     own lane plus whatever is already in flight), builds its own lane, commits the wiki if it
+     changed, and reschedules — ~120s while actively dispatching, ~360s when the fleet is full.
+  4. **Watch it** in the terminal (`/loop` shows each tick) or by reading `docs/savi-wiki/` — the
+     backlog's status tags (`ready → dispatched → landed → verified` / `reopened` / `blocked`)
+     are the live state, and the commit history is the audit trail.
+  5. **Steer or stop.** Edit `vision.md`/`backlog.md` between ticks to redirect it; the next tick
+     reads the wiki fresh. It stops itself when nothing is `ready`, in flight, or reopened and its
+     lane is done — or stop it yourself by ending the loop.
+
+  Two rules the skill enforces and you should know going in: **one conductor per fleet**
+  (`spawn_savi_status` is account-wide, so two loops double-count vacancy and thrash Savi — in
+  team mode exactly one agent conducts), and **delegate broad, never a step list** (the split
+  across sub-agents is what the fan-out is good at). The wiki being git-tracked is the point that
+  makes it survive your own context being compacted: a fresh conductor re-enters by reading
+  `index.md`, not your chat history.
+
+### Changed
+
+- **Idle lanes are now stated as the finding, across every surface.** The tool description, the
+  session guide, `spawn_team_brief`'s opening prompt, and the README all say the same thing: free
+  lanes are parallelism nobody had to key, check out, or supervise, and an agent building
+  serially past four of them is choosing the slow route. The advice line is computed from the
+  actual count, so it escalates — eight idle lanes reads differently from one, and at full
+  capacity it stops asking for more and points at `spawn_latest` instead. An unreadable fleet
+  argues for delegating anyway rather than for stalling.
+
+- **Handoff uptake is detectable now, and the guidance stops saying it isn't.** `spawn_savi`'s
+  description said an agent "cannot tell whether it was even picked up". A wisp lighting up is
+  exactly that signal. What has *not* changed is attribution: no endpoint reports an author, so a
+  burning wisp means Savi is busy and on what, never that it is busy on your task. Both halves
+  are now said together wherever the old claim appeared.
+
+### Fixed
+
+- **README's solo tool count was stale.** It claimed 32; the real number at 1.7.0 was 34, and is
+  35 with `spawn_savi_status`.
+
 ## [1.7.0] - 2026-08-19
 
 ### Changed
