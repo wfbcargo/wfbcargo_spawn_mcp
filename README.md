@@ -1,6 +1,6 @@
 # spawn-mcp
 
-Local [Model Context Protocol](https://modelcontextprotocol.io) server for the [Spawn](https://www.spawn.co) Games agent API, plus a **Playwright Chromium play client** so the LLM can open the live game, screenshot it, drive input, and debug without asking you to look.
+Local [Model Context Protocol](https://modelcontextprotocol.io) server for the [Spawn](https://www.spawn.co) Games agent API — on **both** of Spawn's engines: pre-6.0 worlds, which are a spec document, and 6.0+ worlds, which are a git repository. It also carries two ways to be *in* the game: a **body** in the world as a real player (no browser), and a **Playwright Chromium play client** so the LLM can open the live game, screenshot it, drive input, and debug without asking you to look.
 
 > **New here?** Read **[GETTING-STARTED.md](GETTING-STARTED.md)** instead: a plain-language walkthrough from install to your first game, no MCP experience assumed. The rest of this file is the technical reference.
 
@@ -15,6 +15,17 @@ npm run setup        # one-time: downloads Chromium (~150MB) for the play client
 ```
 
 `npm run setup` is separate on purpose, so `npm install` never downloads a browser behind your back. The API tools work fine without it; only the `spawn_play_*` tools need Chromium. Equivalent: `npx playwright install chromium`.
+
+### What else you need
+
+| | For | Needed when |
+|---|---|---|
+| **Node 18+** | everything | always |
+| **git** on `PATH` | `spawn_init`, `spawn_push`, `spawn_latest`, `spawn_status` | the world is on engine **6.0+** — its code *is* a git repo |
+| **Chromium** (`npm run setup`) | `spawn_play_*` | you want to *see* the world |
+| **[Bun](https://bun.sh)** | `spawn_client_*` | you want a body in the world (the client's session shell is spawned as `bun`) |
+
+None of the last three are needed for a pre-6.0 world you only push to. Nothing here is bundled: each tool says what is missing, and why, if you reach for it without.
 
 ## Cursor config
 
@@ -42,20 +53,60 @@ See `mcp.example.json`. On Windows use forward slashes (`C:/Users/you/...`).
 | `SPAWN_TEAM_DIR` | shared `.git/spawn-team` | Ledger location, for agents that are not worktrees of one repo |
 | `SPAWN_ASSET_BANK` | `~/.spawn-mcp/assets` | Cross-project asset catalog directory |
 | `SPAWN_HTTP_TIMEOUT_MS` | `60000` | Abort API calls that hang |
+| `SPAWN_GIT_TIMEOUT_MS` | `180000` | Abort a git command that hangs (6.0 worlds) |
 | `SPAWN_API_URL` | pinned in `src/config.ts` | Dev override only; must be `https` (or localhost) |
 | `PLAYWRIGHT_BROWSERS_PATH` | Playwright default | Override where Chromium is installed |
 
 ## Loop
 
 ```
-edit → spawn_validate → spawn_push
-     → spawn_play_open (once)
+edit → spawn_validate → spawn_push        (PUT on pre-6.0; commit + git push on 6.0+)
+     → spawn_client_join (once)           a body in the world: boots the room, no browser
+     → spawn_play_open   (once)           your eyes: headed Chromium
      → spawn_play_screenshot / spawn_play_input
      → spawn_logs / spawn_play_console / spawn_exec if broken
      → fix → push → screenshot again
 ```
 
+`spawn_client_join` and `spawn_play_open` answer different questions. A **body** makes the room live
+so `spawn_exec` / `spawn_logs` / `spawn_rooms` read anything at all, and lets you play the game —
+walk, look, press what the world declares. The **browser** is the only thing that tells you whether
+the frame is any good. Join to query, look to judge.
+
 Spawn is WebGPU/canvas, so accessibility snapshots won't see the world. Screenshots are the ground truth.
+
+### Play client (a body in the world)
+
+| Tool | Purpose |
+|------|---------|
+| `spawn_client_join` | Stand your own body in the world as a real player — boots the room, no browser, no GPU |
+| `spawn_client_status` | Which sessions are standing, and how much ttl is left |
+| `spawn_client_leave` | Despawn the body; the room folds when the last one goes |
+| `spawn_client` | Any other client verb — `where`, `players`, `inputs`, `move`, `look`, `witness`, `crossing`, `screenshot`, `run` |
+
+A room **boots for a player and never for a door**: `spawn_exec`, `spawn_logs` and `spawn_rooms`
+read nothing until a body stands. Before this the only way to boot one was `spawn_play_open`, which
+needs a headed Chromium with a working WebGPU adapter. A join needs neither and takes a few seconds.
+
+Sessions are detached and outlive the tool call, so join once and query freely. They **self-expire
+at `ttl`** (default 600s) — that is what stops a forgotten body standing in someone's world — so
+raise it for long work and call `spawn_client_leave` when done.
+
+**Requires [Bun](https://bun.sh).** The client's session shell is literally spawned as `bun`, so
+Node alone gets as far as `shell process failed to spawn (no pid)`. The client package itself needs
+no install: `bun x @spawnco/client` is the fallback, and a global `bun add -g @spawnco/client` is
+used when present.
+
+| Env var | Purpose |
+|---------|---------|
+| `SPAWN_BUN_BIN` | Path to the Bun binary, when it is somewhere unusual |
+| `SPAWN_CLIENT_ENTRY` | Path to `@spawnco/client`'s `bin/spawn.mjs`, to pin a copy |
+| `SPAWN_CLIENT_TIMEOUT_MS` | Abort a client command that hangs (default `120000`) |
+
+> **Known upstream bug: `spawn client run` does not work on Windows.** The session shell validates
+> `scriptPath` as POSIX-absolute, so a `C:\…` path is refused — and `-e` fails identically, because
+> it writes the source to a temp file and passes that path. `spawn_client` detects this and says so
+> rather than reporting it as your script's fault. Every other verb works on Windows.
 
 ### Play browser rules
 
@@ -65,12 +116,81 @@ Three things that cost real debugging time if you learn them the hard way:
 - **`spawn_play_eval` cannot touch your game UI.** `ui.js` renders into a *cross-origin sandboxed iframe*, so `document.querySelector` in the top frame finds none of your buttons and reaching into the frame throws. Click UI with `spawn_play_input` coordinates: screenshot, read the button's position off the image, click it. (`spawn_play_eval` also takes an expression, not a function body: wrap statements in an IIFE.)
 - **`spawn_exec` needs a live room and cannot read your database.** Rooms exist only while a player is connected, so call `spawn_play_open` first or you get a 5xx (the error says so). The endpoint is read-only server-side and refuses `api.sql` outright, even `SELECT`, so there is no way to query the game's SQLite from this server. Verify persistence through replicated state instead.
 
+## Two engines, two lanes
+
+Spawn worlds come in two eras, and they are not two versions of one protocol — they are two
+different write paths. Every tool that reads or writes a world detects which one it is on and
+routes itself, so the tool names below are the same on both.
+
+| | pre-6.0 — the **document lane** | 6.0+ — the **git lane** |
+|---|---|---|
+| the world is | a compiled `GameSpec` document | a git repository |
+| you save with | `PUT /game-specs` | `git push` |
+| the tree | `game.json` + `world/` + `scripts/` | `world.config.yaml`, `places/<place>/cells/x<cx>z<cz>.scene`, `templates/*.js`, `scripts/**` |
+| `spawn_init` | scaffold the project, pull the spec | **clone the repo** into `projectDir` |
+| `spawn_push` | compile + PUT | **commit + push**, and report the rooms' verdicts |
+| `spawn_latest` | pull a spec, sync scripts, `.theirs` receipts | **`git pull --rebase`** |
+| `spawn_validate` | server-side schema check | **local tree pre-flight** — there is no server validator |
+| `spawn_status` | base version, receipts, head vs published | branch, HEAD, ahead/behind, uncommitted |
+| `spawn_exec` / `spawn_logs` / `spawn_rooms` | — | identical on both lanes |
+
+On a 6.0 world the document `PUT` does not degrade or fall back: it answers `409 world_is_git`
+before it reads the body. That is what a pre-1.9 `spawn_push` was hitting.
+
+### `engineVersion`
+
+Every lane-sensitive tool takes an optional `engineVersion`. Omit it and the engine is read from
+the API and cached. Pass it — a semver (`6.0.0`, `5.4`) or an era name (`6.0`, `document`) — and it
+is **checked** against the world's real pin; a disagreement fails the call without writing
+anything.
+
+```
+engineVersion omitted     → detect from the API, cache it
+engineVersion "6.0"       → git lane, and verify the world really is on it
+engineVersion "document"  → document lane, same verification
+mismatch                  → error, nothing written
+```
+
+It is an assertion, not an override, because the failure it prevents is a document-lane push aimed
+at a git world — or a `game.json` scaffolded over a live clone. `spawn_exec`, `spawn_logs` and
+`spawn_rooms` do not take it: those endpoints are identical on both lanes.
+
+The API answers the engine question in three places, and all three are used —
+`GET /api/agent/v1/me` and `/api/agent/v1/worlds` carry `engine: { semver, era, git }` per world,
+and `GET /api/sdk/v1/{id}/agent/docs` carries `engineVersion` + `era`.
+
+### Working a 6.0 world
+
+- **`spawn_init` clones.** The agent token is the git password, passed per-command and never
+  written to `.git/config`. `.env` is hidden through `.git/info/exclude`, and this server's own
+  files (docs, caches, screenshots) live under `.git/spawn-mcp/` — never in the tree, because a
+  6.0 world *tracks* `.spawn/` itself.
+- **Clones are shallow** (`depth: 20`, `depth: 0` for the full history). A live world's `main` ran
+  to 18,500 objects and 80 MB and would not finish fetching; its tip is a few hundred objects and
+  a few seconds. Editing, committing and pushing all work from a shallow clone. `git log
+  --notes=spawn` needs `depth: 0`.
+- **`spawn_push` needs a `message`, and it is not a log line.** Its first line lands in the
+  creator's chat and their changes list under your name — one plain sentence about what changed
+  for the player. `body` carries the how, and is the only channel to Savi an agent has.
+- **Read `AGENTS.md` at the clone root**; it is that world's own grammar. Then read
+  `.git/spawn-mcp/tome-api.md` in full before writing code — every shape in it is exact, and a
+  push in another shape is refused naming the row, the line and the field.
+- **The push is the validator, and it is live.** There is no dev/live split to absorb a broken
+  tree. `spawn_validate` runs a local pre-flight first (scripts ESM-parse, scene headers and cell
+  keys agree, image bytes match their extension, no binaries under `assets/`), and `spawn_push`
+  runs it again over the changed files and refuses on failure — but clean locally does not mean the
+  push will land.
+- **Worlds move fast.** Savi, `exec` and other clones commit to the same repo, so a
+  non-fast-forward rejection is ordinary. Pull with `spawn_latest`, then push again.
+
 ## First connection
 
 1. Spawn gear → **Build with a coding agent** → fresh `sbk_…` key (~5 min, once).
 2. **`spawn_bootstrap`** → token lands in project `.env` (masked in tool output). Use a distinct `name` per agent.
 3. **`spawn_me`**, then **`spawn_create_game`** (or list + **`spawn_set_variant`**).
-4. **`spawn_init`**, read `.spawn/guide.md` + `.spawn/tome-api.md`.
+4. **`spawn_init`** — scaffolds a pre-6.0 project, or clones a 6.0 world's repo. Then read the
+   guide and the Tome API reference it saved (`.spawn/` on the document lane,
+   `.git/spawn-mcp/` on the git lane; a 6.0 clone also carries `AGENTS.md` at its root).
 5. **`spawn_play_open`**: agent joins as its own browser client (creator can still keep their tab open).
 
 ## Multi-agent
@@ -186,15 +306,15 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 | `spawn_me` | Whoami |
 | `spawn_list_games` / `spawn_create_game` / `spawn_set_variant` | Pick a game |
 | `spawn_getting_started` | Whole workflow + what this project already has (no credentials needed) |
-| `spawn_init` | Scaffold project + docs |
-| `spawn_docs` | Guide, tome API, skills index |
+| `spawn_init` | Scaffold project + docs (pre-6.0), or clone the world's repo (6.0+) |
+| `spawn_docs` | Guide, tome API, skills index — and the world's engine era + semver |
 | `spawn_skills` / `spawn_skill` | Browse the skill menu / load a set of skills by id |
-| `spawn_latest` | Pull head / published / version / updateSlug (+ script sync) |
-| `spawn_validate` / `spawn_push` | Compile + schema check / live push |
+| `spawn_latest` | Pull head / published / version / updateSlug (+ script sync); `git pull --rebase` on 6.0+ |
+| `spawn_validate` / `spawn_push` | Schema check (pre-6.0) or local tree pre-flight (6.0+) / live push — PUT or commit+push |
 | `spawn_exec` / `spawn_logs` / `spawn_rooms` | Live world inspect (needs a live room; no SQL) |
 | `spawn_savi` | Context for Savi, or hand it a task to fan out across its sub-agents |
 | `spawn_savi_status` | How many of Savi's 8 sub-agents are running, and on what (needs a play session) |
-| `spawn_revoke` / `spawn_status` | Disconnect / local + head/published health |
+| `spawn_revoke` / `spawn_status` | Disconnect / local + engine + remote health (versions, or git divergence) |
 
 ### Asset bank
 | Tool | Purpose |
@@ -358,7 +478,16 @@ Release notes live in [CHANGELOG.md](CHANGELOG.md). Versions are tagged `v<major
 
 - `SPAWN_AGENT_KEY` lives in the game project's `.env` only.
 - Tools never echo the full token; `spawn_bootstrap` and `spawn_status` return a masked prefix.
-- `.env` and `.spawn/` are gitignored by init/bootstrap.
+- `.env` and `.spawn/` are gitignored by init/bootstrap on the document lane. In a 6.0 clone
+  `.env` goes in `.git/info/exclude` instead — the world's own `.gitignore` is never touched —
+  and this server's files live under `.git/spawn-mcp/`, because a 6.0 world tracks `.spawn/`
+  itself. `spawn_push` refuses to run while any of this session's artifacts are sitting in the
+  tree, since a 6.0 push is `git add -A`.
+- **The git credential is never written down.** The helper is passed per-invocation with `-c`
+  (nothing in `.git/config`, nothing in `git remote -v`) and its body references `$SPAWN_TOKEN`,
+  expanded by the shell git runs it in — so the token is never an argv element and reaches the
+  child through its environment only. Git output is scrubbed of the token before it is
+  returned, and `GIT_TERMINAL_PROMPT=0` makes a credential failure fail rather than hang.
 - The play browser is a normal player client. It runs in a fresh, credential-free context and does not inject the agent key into the page.
 
 ### Trust model
@@ -366,6 +495,9 @@ Release notes live in [CHANGELOG.md](CHANGELOG.md). Versions are tagged `v<major
 This server hands an LLM real capabilities on your machine. Worth knowing before you run it:
 
 - **Filesystem writes.** Every tool takes a `projectDir` and writes `.env`, `.gitignore`, `game.json`, `scripts/**`, and `.spawn/**` under it. There is no sandbox beyond the path you pass.
+- **Git execution (6.0 worlds).** `spawn_init` / `spawn_latest` / `spawn_push` run `git` in that
+  directory — clone, fetch, rebase, `add -A`, commit, push. A push to a 6.0 world is live in
+  every open room within about a second; there is no staging step and no dev/live split.
 - **Code execution.** `spawn_exec` runs JS in your live room; `spawn_play_eval` runs JS in the play page; `spawn_play_open` will navigate to any URL it's given.
 - **Untrusted text flows back to the model.** `spawn_logs`, `spawn_exec`, and `spawn_play_console` return server- and player-influenced content. Treat it as data, not instructions.
 - **The API origin is pinned** to `https://www.spawn.co` in [`src/config.ts`](src/config.ts). It is deliberately *not* read from the project `.env` and *not* a tool argument, so neither a cloned game repo nor the model can redirect your bearer token. Only the `SPAWN_API_URL` process env, set by whoever wrote the MCP config, can override it, and only to an `https` origin (or localhost).

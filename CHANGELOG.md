@@ -2,6 +2,264 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-09-06
+
+**Spawn 6 support.** Spawn 6 is not a new version of the thing this server talked to — it is a
+different write path, and 1.x could not reach it at all. A 6.0 world's code is a git repository, and
+the whole-document `PUT /game-specs` that every 1.x push used answers `409 world_is_git` against one
+*before it reads the body*. Every `spawn_push` aimed at a 6.0 world failed, and nothing it reported
+was reaching the tree.
+
+2.0 detects which engine a world is on and routes itself. The tool names did not change, so an
+agent prompt written for 1.x keeps working on both — but the lanes underneath are genuinely
+different, and the breaking changes below are the places where that shows.
+
+It also gains a body. A room boots for a *player* and never for a door, so `spawn_exec`,
+`spawn_logs` and `spawn_rooms` read nothing until someone is standing in the world. In 1.x the only
+way to arrange that was `spawn_play_open` — a headed Chromium with a working WebGPU adapter.
+`spawn_client_join` puts the agent's own body in the room instead: no browser, no GPU, a few
+seconds.
+
+**Worlds on a pre-6.0 engine are unaffected.** Every document-lane behaviour in this list is
+unchanged from 1.8.0.
+
+### Breaking changes
+
+Only on **engine 6.0+ worlds**; the document lane behaves exactly as it did.
+
+1. **`spawn_init` clones instead of scaffolding.** There is no spec document to scaffold from — the
+   tree arrives whole or not at all. A project directory that is not empty and is not already this
+   world's clone is **refused** rather than cloned over, where 1.x would have written a `game.json`
+   that could never be pushed.
+2. **`spawn_push` requires `message`.** The commit's first line lands in the creator's chat under
+   your name, so it is a required argument on this lane, not an optional label. Calls without one
+   fail.
+3. **`spawn_push` refuses `force`.** It meant "whole-replace over the base-version rail", and there
+   is no safe equivalent: on a git world it would mean a force-push, and the server never
+   force-pushes or merges.
+4. **`spawn_latest` refuses `mode`, `version`, `updateSlug` and `applyLocal`.** They are document
+   concepts. Silently ignoring "give me the published live snapshot" and handing back the dev head
+   would look like it worked, so it is an error instead. With no arguments it is `git pull --rebase`.
+5. **`spawn_validate` is a local pre-flight, not an authority.** This lane has no server-side
+   validator — the push itself is the validator. "Clean" now means only that the failures visible
+   without the engine are absent.
+6. **`spawn_status` drops the version rail.** `baseVersion`, `hasSpecRail`, `conflictReceipts` and
+   `hasGameJson` are absent on a 6.0 world; branch, HEAD, ahead/behind and uncommitted files take
+   their place. Anything parsing those keys must handle their absence.
+7. **This server's own files moved out of the world tree.** A 6.0 world *tracks* `.spawn/` — its
+   engine pin, its skills index, its per-cell cost files — so the docs and caches written there in
+   1.x now live under `.git/spawn-mcp/`. If you read `.spawn/guide.md` or `.spawn/tome-api.md` by
+   path, read `.git/spawn-mcp/` on a 6.0 clone (`spawn_init` reports `docsDir`, and a clone also
+   carries its own `AGENTS.md` at the root). Screenshots moved with them.
+8. **Lane-sensitive tools now make an engine-detection call** (cached per process, and persisted).
+   A world whose engine cannot be read from the API is now an error where 1.x would have gone ahead
+   and pushed. Pass `engineVersion` explicitly to proceed without detection.
+9. **New optional dependency: [Bun](https://bun.sh)**, required by the four `spawn_client_*` tools
+   and nothing else. Everything that worked in 1.8.0 still works without it.
+
+### Added
+
+- **Both write lanes, detected per world.** Every tool that reads or writes a world routes itself:
+
+  | tool | pre-6.0 (document lane) | 6.0+ (git lane) |
+  |------|-------------------------|-----------------|
+  | `spawn_init` | scaffold `game.json` / `world/` / `scripts/`, pull the spec | clone the repo into `projectDir` |
+  | `spawn_push` | compile + `PUT /game-specs` | stage, commit, `git push`, report the rooms' verdicts |
+  | `spawn_latest` | pull a saved spec, sync scripts, `.theirs` receipts | `git pull --rebase` |
+  | `spawn_validate` | server-side schema validation | local tree pre-flight |
+  | `spawn_status` | base version, receipts, head vs published | branch, HEAD, ahead/behind, uncommitted |
+  | `spawn_docs` | guide + tome API + skills | same, and the world's era + semver |
+  | `spawn_exec` / `spawn_logs` / `spawn_rooms` | unchanged | unchanged — identical on both lanes |
+
+- **`engineVersion`, an optional argument on every lane-sensitive tool.** Omitted, the world's
+  engine is read from the API and cached. Passed — as a semver (`6.0.0`, `5.4`) or an era name
+  (`6.0`, `document`) — it is *checked* against the real pin, and a disagreement fails the call
+  without writing anything. It is an assertion, not an override, because the failure it exists to
+  prevent is a document-lane push aimed at a git world, or a `game.json` scaffolded over a live
+  clone. `spawn_exec` / `spawn_logs` / `spawn_rooms` deliberately do not take it: those endpoints
+  are identical on both lanes, so the parameter would be a knob that does nothing.
+
+  The API answers the engine question in three places now, and all three are used:
+  `GET /api/agent/v1/me` and `/worlds` carry `engine: { semver, era, git }` per world, and
+  `GET /api/sdk/v1/{id}/agent/docs` carries `engineVersion` + `era`. Detection reads `worlds` first
+  (a few hundred bytes) and falls back to `docs`, which is authoritative for any variant the token
+  can reach. A `409 world_is_git` from the document lane drops the cached era, so a world migrated
+  to 6.0 mid-session is picked up on the next call rather than retried into the wall.
+
+- **`spawn_client_*` — the agent's own body in the world.**
+
+  | tool | what it does |
+  |------|--------------|
+  | `spawn_client_join` | stands your body in the world as a real player — boots the room, no browser, no GPU |
+  | `spawn_client_status` | which sessions are standing, and how much ttl is left |
+  | `spawn_client_leave` | despawns the body; the room folds when the last one goes |
+  | `spawn_client` | any other client verb — `where`, `players`, `inputs`, `move`, `look`, `witness`, `crossing`, `screenshot`, `run` |
+
+  This is the cheap way to a live room, and it is also how an agent **plays** the game it is
+  building: the body wears your name, stands in the room's census beside the creator and Savi, and
+  the world's own player hooks fire for it like anyone's. `spawn_exec` and `spawn_logs` now name the
+  join in their no-live-room errors instead of sending you to open a browser.
+
+  A body and a browser answer different questions, and the build loop now says so in that order: a
+  body makes the room readable and lets you act in it; the browser is the only thing that tells you
+  whether the frame is any good. **Join to query, look to judge.**
+
+  Four tools rather than one per verb, on purpose: the client is served by the stack rather than
+  shipped here ("the client it runs is the one the stack you join serves"), so its verb list can
+  change under us. Join, leave and status carry real schemas because they are the lifecycle an agent
+  has to get right; everything else goes through one passthrough that cannot drift.
+
+- **`spawn_push` takes a `message` and a `body` on the git lane.** The commit's first line is not a
+  log entry: it lands in the creator's chat and their changes list under the agent's name, beside
+  what they and Savi said. The tool asks for one plain sentence about what changed for the player.
+  `body` carries the how — and since no agent account can wake Savi any more, that body is the only
+  channel to her an agent has.
+
+- **A local pre-flight for the git lane (`spawn_validate`).** The push *is* the validator on this
+  lane, and it is live in every open room the moment it lands, with no dev/live split to absorb a
+  broken tree. So `spawn_validate` checks locally what the push law names explicitly: every script
+  and template is ESM-parsed (`vm.SourceTextModule` in a child process — a real parse that accepts
+  `import`/`export`, and never evaluates the module), `.scene` files are checked against their
+  `# spawn-scene v2 yaml <cellKey>` header and the cell key their filename implies, image bytes are
+  checked against their extension, and binaries under `assets/` are caught before
+  `law.git.asset-kind` refuses them. `spawn_push` runs the same check over the changed files and
+  blocks on failure.
+
+- **`depth` on `spawn_init`** — how much history a 6.0 clone takes (default 20, `0` for all of it).
+
+### Fixed
+
+- **The play client could not open a 6.0 world.** `agent/docs` returns `playUrl` absolute on the git
+  lane and relative on the document lane, and four call sites prefixed it with the API origin
+  unconditionally — producing `https://www.spawn.cohttps://www.spawn.co/@user/world`. All of them
+  now go through one helper that leaves an absolute URL alone.
+
+- **`spawn_savi` reported an opaque 403.** The studio-chat door is now closed by *account class*: a
+  standalone agent account (`sak_` from `/signup`) can never wake Savi, linked or not, while a
+  human's own token still can. Retrying and re-wording both fail forever, so the tool names the
+  reason and points at the channel that does work — the commit body.
+
+- **`spawn_push` echoed a commit subject that had not landed.** When a push sends a commit that
+  already existed (usually one a refused push left behind), it reports the real HEAD subject and
+  says nothing new was committed, rather than echoing back the `message` argument.
+
+### Security
+
+- **The git credential never lands anywhere durable.** The helper is passed per-invocation with
+  `-c`, so a clone this server makes carries no credential in `.git/config` and none in
+  `git remote -v`. The helper body references `$SPAWN_TOKEN`, expanded by the shell git runs it in,
+  so the token is never an argv element; it reaches the child through its environment only. Git
+  output is scrubbed of the token, and of any credentials riding in an echoed URL, before it is
+  returned. `GIT_TERMINAL_PROMPT=0` is set because an MCP server has no terminal: a git that decided
+  to prompt would hang the tool call rather than fail it. The username is validated against a strict
+  handle pattern rather than escaped, because it is interpolated into a shell function body.
+
+- **This server's own files stay out of the world tree.** They live under `.git/spawn-mcp/`, which
+  is never tracked, never pushed, and never touched by a pull; `.env` is hidden via
+  `.git/info/exclude` rather than the world's own `.gitignore`, so a clone carries no change nobody
+  asked for. Excluding `.spawn/` wholesale — the first attempt — was worse than the problem: it
+  would have made `git add -A` silently skip legitimate new world files there, and the push would
+  have landed missing exactly the work nobody thought to check. A guard now refuses to push when
+  this session's own artifacts (`.env`, `.theirs` receipts, screenshots, a document-lane
+  `game.json`) are sitting in the tree, because a 6.0 push is `git add -A`.
+
+- **The play client's origin is pinned, like the API's.** `--origin` anywhere on a client line
+  redirects it to another stack, and the agent token travels to whatever that names — the same
+  threat `src/config.ts` pins the API origin against, reached through a different door. It is
+  refused in the verb and in every argument, and `SPAWN_ORIGIN` is set explicitly to this server's
+  resolved API origin so the client and the API always talk to the same host. Verbs are validated
+  against a plain-word pattern and always run as `spawn client <verb>`, so the blast radius is the
+  client namespace — never `spawn upload`, `spawn fetch`, or a flag smuggled into the front of the
+  line. Arguments go through `execFile` with no shell, and the client runs with its cwd in this
+  server's own cache directory, never in the game project (`bun x` resolves a package into its cwd,
+  and a world's tree is not the place for that).
+
+### Requirements
+
+- **git** on `PATH`, for 6.0 worlds. Pre-6.0 worlds do not need it.
+- **[Bun](https://bun.sh)** for the four `spawn_client_*` tools, and nothing else. It is not a
+  preference: the client's session shell is literally spawned as `bun <entry>`, so under Node the
+  CLI gets as far as `shell process failed to spawn (no pid)`. The client *package* needs no
+  install — `bun x @spawnco/client` is the fallback, and a global `bun add -g @spawnco/client` is
+  used when present.
+
+| New env var | Default | Purpose |
+|---|---|---|
+| `SPAWN_GIT_TIMEOUT_MS` | `180000` | Abort a git command that hangs |
+| `SPAWN_CLIENT_TIMEOUT_MS` | `120000` | Abort a client command that hangs |
+| `SPAWN_BUN_BIN` | resolved | Path to the Bun binary, when it is somewhere unusual |
+| `SPAWN_CLIENT_ENTRY` | resolved | Path to `@spawnco/client`'s `bin/spawn.mjs`, to pin a copy |
+
+### Notes
+
+- **Clones are shallow by default (`depth: 20`; `depth: 0` for everything).** Measured against a
+  live world, `main`'s full history was 18,500 objects and 80 MB and the fetch did not finish at
+  all; the same world's tip was ~320 objects and a few seconds. Nothing this server does needs deep
+  history — it edits the tip, commits, and pushes, all of which work from a shallow clone. The
+  `refs/notes/spawn` refspec is only configured on a full clone: notes point at commits all through
+  history, so on a shallow clone they cannot resolve, and configuring the refspec anyway breaks
+  every later `git pull` with "remote did not send all necessary objects".
+
+- **Worlds move fast.** On the world this was built against, `origin/main` advanced between a fetch
+  and a push seconds later, so a non-fast-forward rejection is ordinary rather than exceptional:
+  `spawn_push` names it as such and points at `spawn_latest`, and `spawn_status` reports how far
+  behind you are. The server has a second form of it — `law.git.head-moved`, a *remote* rejection
+  when the world moves while the push is being read — and both are reported the same way, because
+  the fix is the same: pull, then push.
+
+- **Client sessions are detached and outlive the tool call**, which is what makes
+  join-once-then-query work. They self-expire at `ttl` (default 600s) — the safety net against a
+  forgotten body standing in someone's world — and this server deliberately does not kill them on
+  shutdown, since a session is meant to survive an MCP restart.
+
+- Bun resolution finds the real binary rather than the `bun`/`spawn` shim on `PATH`, because on
+  Windows those are `.cmd` files that cannot be exec'd without a shell.
+
+### Known upstream bugs
+
+Both are in Spawn's packaged client, not in this server; both are reported here because the errors
+are otherwise very hard to read.
+
+- **`spawn client run` does not work on Windows.** The session shell validates `scriptPath` as
+  POSIX-absolute, so a `C:\…` path is refused — and `-e` fails identically, because it writes the
+  source to a temp file and passes that same path. Play scripts are therefore unavailable on Windows
+  entirely. `spawn_client` detects the signature and says it is the client's bug rather than
+  reporting it as the script's fault. Every other verb works: `where`, `players`, `inputs`, `move`,
+  `look`, `witness`, `crossing`, `screenshot`.
+- **The loader in `@spawnco/client` 0.2.0 passes a bare Windows path to `import()`** when run under
+  Node (`ERR_UNSUPPORTED_ESM_URL_SCHEME: Received protocol 'c:'`). Under Bun it does not bite, so
+  this server's Bun requirement routes around it.
+
+### Verified against a live world
+
+`@wfbcargo/simplecity`, engine `6.0.0`:
+
+- **Git lane:** clone, `git pull --rebase`, the local pre-flight over 210 scripts and 9 scenes, a
+  refused non-fast-forward push, the rebase, and an accepted push whose receipt read
+  `live · 1 room · 4 players · 1 op`.
+- **Engine detection:** era and semver from both `worlds` and `docs`; a `document` claim about a 6.0
+  world refused; a patch-version disagreement warned but allowed.
+- **Play client:** joined as a real player and stood in the room beside Savi and the creator;
+  `agent/rooms` listed the room and `agent/exec` answered `200` with a live read of 2,628 entities
+  **with no browser open anywhere**; walked the body by input; read `where` / `players` / `inputs`;
+  departed cleanly. Joining by world id works as well as by `@user/world` address, so the tools use
+  `SPAWN_VARIANT_ID` directly.
+- **Document lane**, which this account owns no world on, is covered by tests against a loopback
+  stand-in for the API.
+
+357 tests, 91 suites.
+
+### Upgrading from 1.8.0
+
+Nothing to do for a pre-6.0 world. For a 6.0 world:
+
+1. Install git (and Bun, if you want `spawn_client_*`).
+2. Run `spawn_init` in an **empty** directory holding only your `.env` — it clones the world there.
+   An existing 1.x project directory full of `game.json` and `scripts/` is not a 6.0 clone and will
+   be refused; start a fresh one.
+3. Read `AGENTS.md` at the clone root and `.git/spawn-mcp/tome-api.md` before writing code.
+4. Pass `message` to `spawn_push` from now on.
+
 ## [1.8.0] - 2026-08-20
 
 ### Added

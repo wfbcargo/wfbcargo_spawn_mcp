@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page } from "playwright";
 import { api, variantPath } from "./client.js";
 import { loadEnv, requireEnv, resolveProjectDir } from "./env.js";
+import { absoluteUrl } from "./lane.js";
 import { projectStudioFrame, type StudioSnapshot } from "./wisps.js";
 
 export type ConsoleEntry = {
@@ -89,13 +90,15 @@ export async function resolvePlayUrl(
   requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
   const { status, json } = await api(env, "GET", variantPath(env, "/agent/docs"));
   if (status === 200 && json?.playUrl) {
-    return { playUrl: `${env.apiUrl}${json.playUrl}`, source: "docs" };
+    // Absolute on the git lane, relative on the document lane — prefixing
+    // blindly produced "https://www.spawn.cohttps://www.spawn.co/@user/world".
+    return { playUrl: absoluteUrl(env.apiUrl, json.playUrl)!, source: "docs" };
   }
 
   const games = await api(env, "GET", "/api/agent/v1/games");
   const match = (games.json?.games ?? []).find((g: any) => g.variantId === env.variantId);
   if (match?.playUrl) {
-    return { playUrl: `${env.apiUrl}${match.playUrl}`, source: "games" };
+    return { playUrl: absoluteUrl(env.apiUrl, match.playUrl)!, source: "games" };
   }
 
   throw new Error(

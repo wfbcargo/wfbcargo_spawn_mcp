@@ -30,7 +30,34 @@ import {
 import { isHandoff, renderHandoff } from "./brief.js";
 import { countWispsOnScreen, getSession, readStudio } from "./browser.js";
 import { resolveApiUrl } from "./config.js";
-import { SESSION_GUIDE } from "./session.js";
+import {
+  ENGINE_VERSION_DESCRIPTION,
+  EngineMismatchError,
+  engineSummary,
+  forgetEngine,
+  gitLaneRedirect,
+  isGitLane,
+  laneName,
+  resolveEngine,
+  stateDir,
+  type EngineInfo,
+  type Era,
+} from "./engine.js";
+import {
+  cloneInto,
+  commitAndPush,
+  configureNotes,
+  excludeLocally,
+  isEmptyDir,
+  isGitRepo,
+  pullRebase,
+  status as gitStatus,
+  spawnNote,
+  strangersIn,
+} from "./git.js";
+import { absoluteUrl, checkClone, gitCreds } from "./lane.js";
+import { checkTree, formatTreeReport } from "./tree.js";
+import { LANE_GUIDE, SESSION_GUIDE } from "./session.js";
 import { renderFleetLine, summarizeFleet } from "./wisps.js";
 import {
   agentFor,
@@ -77,13 +104,67 @@ const projectDirSchema = z
   );
 
 /**
+ * Carried by every tool whose behaviour depends on the world's engine — the
+ * ones that read or write the world itself. Room tools (exec / logs / rooms)
+ * deliberately do NOT take it: those endpoints are identical on both lanes, so
+ * the parameter would be a knob that does nothing.
+ */
+const engineVersionSchema = z.string().optional().describe(ENGINE_VERSION_DESCRIPTION);
+
+/**
+ * Resolve the lane, turning the two ways it can fail into tool errors rather
+ * than exceptions. `null` means the caller should return `failure` unchanged.
+ */
+async function lane(
+  dir: string,
+  env: SpawnEnv,
+  engineVersion?: string
+): Promise<{ info: EngineInfo } | { failure: ReturnType<typeof err> }> {
+  try {
+    return { info: await resolveEngine(dir, env, engineVersion) };
+  } catch (e: any) {
+    if (e instanceof EngineMismatchError) return { failure: err(e.message) };
+    return { failure: err(`Could not resolve this world's engine: ${e?.message ?? e}`) };
+  }
+}
+
+/**
+ * The document lane answering "this world is git" is not an error to report and
+ * move on from — it means the cached era is stale, so drop it and teach.
+ */
+function gitLaneFrom409(env: SpawnEnv, info: EngineInfo, json: any, what: string) {
+  forgetEngine(env);
+  const pointer = json?.pointer ?? {};
+  return err(
+    gitLaneRedirect(
+      {
+        ...info,
+        era: isGitLane(info.era) ? info.era : "6.0",
+        gitUrl: pointer.gitUrl ?? info.gitUrl,
+        playUrl: pointer.playUrl ?? info.playUrl,
+        codeUrl: pointer.codeUrl ?? info.codeUrl,
+        address: pointer.address ?? info.address,
+      },
+      what
+    )
+  );
+}
+
+/**
  * The live-room endpoints answer 502 when no room is running. That reads as a
  * server outage unless you know a room only exists while someone is connected.
  */
 function execHint(result: ApiResult): string {
   const detail = apiError(result);
-  if (result.status === 502 || result.status === 503) {
-    return `${detail}\n\nA 5xx here usually means NO LIVE ROOM: rooms only exist while a player is connected. Open one with spawn_play_open (or have the creator open the play URL) and retry.`;
+  const noRoom =
+    result.status === 502 || result.status === 503 || result.json?.error === "no_live_room";
+  if (noRoom) {
+    return (
+      `${detail}\n\nNO LIVE ROOM: a room boots for a PLAYER and never for a door, so these endpoints read nothing until a body ` +
+      "stands. Boot one yourself with spawn_client_join — your own body in the world, no browser and no GPU, live while it stands " +
+      "(and check spawn_client_status for a ttl that has run out). spawn_play_open boots one too, and is what you want when you need " +
+      "to SEE the world rather than query it. Or have the creator open the play URL."
+    );
   }
   return detail;
 }
@@ -178,14 +259,144 @@ export type InitResult =
   | { ok: true; summary: Record<string, unknown> }
   | { ok: false; error: string };
 
+/** Pull guide / tome API / skills into `.spawn/`, on either lane. */
+async function saveDocs(dir: string, env: SpawnEnv, era?: Era): Promise<ApiResult> {
+  const docs = await api(env, "GET", variantPath(env, "/agent/docs"));
+  if (docs.status !== 200) return docs;
+  writeDocs(dir, docs.json, era);
+  return docs;
+}
+
+/** The three doc files, written wherever this project's state lives. */
+function writeDocs(dir: string, json: any, era?: Era): string {
+  const home = stateDir(dir, era);
+  saveFile(join(home, "guide.md"), json.guide ?? "");
+  saveFile(join(home, "tome-api.md"), json.tomeApi ?? "");
+  saveFile(join(home, "skills.json"), JSON.stringify(json.skills ?? [], null, 2));
+  return home;
+}
+
+/**
+ * Provision a project directory for an engine-6.0 world: clone the repo.
+ *
+ * The world's code IS the repo, so there is nothing to scaffold — the tree
+ * arrives whole or not at all. Three shapes of directory, told apart before
+ * anything is written, because two of them would be destructive to guess at:
+ * empty (clone into it), already this world's clone (configure and leave the
+ * files alone), and anything else (refuse, and say what it found).
+ */
+async function initGitWorld(
+  dir: string,
+  env: SpawnEnv,
+  info: EngineInfo,
+  depth?: number
+): Promise<InitResult> {
+  if (!info.gitUrl) {
+    return {
+      ok: false,
+      error:
+        `This world is on engine ${info.semver ?? info.era} (the git lane) but the API did not name a clone URL for it. ` +
+        "It may have no @-address yet — ask the creator to name it, then retry.",
+    };
+  }
+
+  const creds = await gitCreds(dir, env);
+  const notes: string[] = [];
+  let cloned = false;
+
+  if (await isGitRepo(dir)) {
+    const check = await checkClone(dir, info);
+    if (!check.ok) return { ok: false, error: check.message };
+    notes.push("Clone already present — files left untouched (use spawn_latest to pull).");
+  } else if (isEmptyDir(dir)) {
+    const result = await cloneInto(info.gitUrl, dir, creds, ...(depth != null ? [{ depth }] : []));
+    notes.push(
+      `Cloned ${info.gitUrl} (branch ${result.branch}, ` +
+        `${result.depth > 0 ? `last ${result.depth} commits` : "full history"})`
+    );
+    if (result.depth > 0) {
+      notes.push(
+        "Shallow by design: a live world's full history runs to tens of thousands of objects and does not reliably " +
+          "finish fetching, while the tip arrives in seconds. Editing, committing and pushing all work from here. " +
+          "Pass depth:0 if you genuinely need the whole history (and expect it to be slow)."
+      );
+    } else if (!result.notes) {
+      notes.push("The spawn notes ref was not fetched — `git log --notes=spawn` will be empty.");
+    }
+    if (result.excluded.length) notes.push(`excluded from this clone: ${result.excluded.join(", ")}`);
+    cloned = true;
+  } else {
+    return {
+      ok: false,
+      error:
+        `${dir} is not empty and is not a git repository, so cloning into it would be destructive. ` +
+        "Nothing was written. Point projectDir at an empty directory or at an existing clone of " +
+        `${info.gitUrl}.`,
+    };
+  }
+
+  await configureNotes(dir);
+  // The token lives in .env inside this directory and .spawn/ holds our caches.
+  // Neither may reach a commit, and neither belongs in the world's tracked
+  // .gitignore — so they are excluded locally, in this clone only.
+  const excluded = excludeLocally(dir);
+  if (excluded.length) notes.push(`excluded from this clone: ${excluded.join(", ")}`);
+
+  const docs = await saveDocs(dir, env, info.era);
+  if (docs.status !== 200) {
+    return { ok: false, error: `init: docs failed (${docs.status}): ${docs.json?.error}` };
+  }
+
+  const st = await gitStatus(dir);
+  const home = stateDir(dir, info.era);
+  return {
+    ok: true,
+    summary: {
+      projectDir: dir,
+      engine: engineSummary(info),
+      cloned,
+      // Named explicitly: on this lane the docs are NOT under .spawn/, because
+      // that directory belongs to the world.
+      docsDir: home,
+      branch: st.branch,
+      head: st.head,
+      headSubject: st.headSubject,
+      specVersion: docs.json.specVersion,
+      playUrl: absoluteUrl(env.apiUrl, docs.json.playUrl),
+      docsWarnings: docs.json.errors ?? [],
+      notes,
+      next:
+        `Read AGENTS.md at the root of this clone — it is this world's own grammar — then ${join(home, "tome-api.md")} IN FULL ` +
+        "before you write any code: every shape in it is exact, and a push in another shape is refused naming the row, the line and the field. " +
+        'Then load the craft: spawn_skill ids: ["…"] for every domain the work touches. ' +
+        "Edit the tree, then spawn_push with a `message` — its first line lands in the creator's chat, so write it as one plain " +
+        "sentence about what changed for the player. Every push is live in every open room.",
+    },
+  };
+}
+
 /**
  * Scaffold a project directory: gitignore secrets, world/ + scripts/, pull the
  * current spec into game.json with rails, materialize scripts, save docs.
  *
  * Shared by `spawn_init` and `spawn_team_add`, so provisioning a teammate's
- * worktree cannot drift from provisioning your own.
+ * worktree cannot drift from provisioning your own. On the git lane it hands
+ * off to `initGitWorld`: a 6.0 world has no spec document to scaffold from.
  */
-export async function initProject(dir: string, env: SpawnEnv): Promise<InitResult> {
+export async function initProject(
+  dir: string,
+  env: SpawnEnv,
+  engineVersion?: string,
+  depth?: number
+): Promise<InitResult> {
+  let info: EngineInfo;
+  try {
+    info = await resolveEngine(dir, env, engineVersion);
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+  if (isGitLane(info.era)) return initGitWorld(dir, env, info, depth);
+
   const gitignored = ensureGitignore(dir);
   for (const sub of ["world", "scripts"]) {
     const p = join(dir, sub);
@@ -215,12 +426,9 @@ export async function initProject(dir: string, env: SpawnEnv): Promise<InitResul
     if (written) notes.push(`materialized ${written} script(s) into scripts/`);
   }
 
-  const docs = await api(env, "GET", variantPath(env, "/agent/docs"));
+  const docs = await saveDocs(dir, env);
   if (docs.status !== 200)
     return { ok: false, error: `init: docs failed (${docs.status}): ${docs.json?.error}` };
-  saveFile(join(dir, ".spawn", "guide.md"), docs.json.guide ?? "");
-  saveFile(join(dir, ".spawn", "tome-api.md"), docs.json.tomeApi ?? "");
-  saveFile(join(dir, ".spawn", "skills.json"), JSON.stringify(docs.json.skills ?? [], null, 2));
 
   return {
     ok: true,
@@ -228,9 +436,10 @@ export async function initProject(dir: string, env: SpawnEnv): Promise<InitResul
     projectDir: dir,
     version,
     scriptsMaterialized,
+    engine: engineSummary(info),
     engineVersion: docs.json.engineVersion,
     specVersion: docs.json.specVersion,
-    playUrl: `${env.apiUrl}${docs.json.playUrl ?? ""}`,
+    playUrl: absoluteUrl(env.apiUrl, docs.json.playUrl),
     docsWarnings: docs.json.errors ?? [],
     notes,
     next: 'Read .spawn/guide.md and .spawn/tome-api.md, then load the craft for what you are about to build: spawn_skill ids: ["…"] — every domain the work touches, look skills included (a scene is world-composition + looks, a HUD is game-ui + drawn-art). spawn_skills lists all of them.',
@@ -257,32 +466,55 @@ export function registerTools(server: McpServer): void {
     {
       description:
         "START HERE before any other spawn tool. The whole workflow in one call: setup order, the art/UI skills to load BEFORE building anything visual, the push → screenshot → fix loop, and the multi-agent rules. Also reports what this project already has (token, variant, game.json, docs) so you know which step you're on. Needs no credentials.",
-      inputSchema: { projectDir: projectDirSchema },
+      inputSchema: { projectDir: projectDirSchema, engineVersion: engineVersionSchema },
     },
-    async ({ projectDir }) => {
+    async ({ projectDir, engineVersion }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
-      const state = {
+
+      // Best effort: this tool must answer with no credentials at all, so a
+      // failed detection degrades the report rather than failing the call.
+      let info: EngineInfo | null = null;
+      let engineNote = "unknown (needs a token and SPAWN_VARIANT_ID)";
+      if (env.agentKey && env.variantId) {
+        try {
+          info = await resolveEngine(dir, env, engineVersion);
+          engineNote = `${info.semver ?? info.era} — ${laneName(info.era)}`;
+        } catch (e: any) {
+          engineNote = `could not detect (${e?.message ?? e})`;
+        }
+      }
+      const git = info ? isGitLane(info.era) : false;
+
+      const state: Record<string, boolean> = {
         agentKey: Boolean(env.agentKey),
         variantId: Boolean(env.variantId),
-        gameJson: existsSync(join(dir, "game.json")),
-        docs: existsSync(join(dir, ".spawn", "guide.md")),
-        skillsIndex: existsSync(join(dir, ".spawn", "skills.json")),
+        ...(git
+          ? { clone: await isGitRepo(dir) }
+          : { gameJson: existsSync(join(dir, "game.json")) }),
+        docs: existsSync(join(stateDir(dir, info?.era), "guide.md")),
+        skillsIndex: existsSync(join(stateDir(dir, info?.era), "skills.json")),
       };
+      const provisioned = git ? state.clone : state.gameJson;
       const next = !state.agentKey
         ? "spawn_bootstrap — ask the creator for a fresh sbk_ key (Spawn gear → Build with a coding agent)."
         : !state.variantId
           ? "spawn_create_game, or spawn_list_games + spawn_set_variant."
-          : !state.gameJson || !state.docs
-            ? "spawn_init — scaffold the project and pull docs into .spawn/."
-            : "Read .spawn/guide.md + .spawn/tome-api.md, then spawn_skills to pick the skills this build needs.";
+          : !provisioned || !state.docs
+            ? git
+              ? "spawn_init — clone this world's repo into the project dir and pull docs into .spawn/."
+              : "spawn_init — scaffold the project and pull docs into .spawn/."
+            : git
+              ? "Read AGENTS.md in the clone and .spawn/tome-api.md IN FULL, then spawn_skills to pick the skills this build needs."
+              : "Read .spawn/guide.md + .spawn/tome-api.md, then spawn_skills to pick the skills this build needs.";
 
       const checklist = Object.entries(state)
         .map(([key, ok]) => `  ${ok ? "✓" : "✗"} ${key}`)
         .join("\n");
 
       return text(
-        `${SESSION_GUIDE}\n\n---\n\nThis project (${dir}):\n${checklist}\n\nNext step: ${next}`
+        `${SESSION_GUIDE}\n\n${LANE_GUIDE}\n\n---\n\nThis project (${dir}):\n` +
+          `  engine: ${engineNote}\n${checklist}\n\nNext step: ${next}`
       );
     }
   );
@@ -382,7 +614,7 @@ export function registerTools(server: McpServer): void {
         playUrls: (json.games ?? []).map((g: any) => ({
           name: g.name,
           variantId: g.variantId,
-          open: `${env.apiUrl}${g.playUrl ?? ""}`,
+          open: absoluteUrl(env.apiUrl, g.playUrl),
         })),
       });
     }
@@ -392,7 +624,9 @@ export function registerTools(server: McpServer): void {
     "spawn_create_game",
     {
       description:
-        "Create a new game in the creator's account. Optionally writes SPAWN_VARIANT_ID to .env. Creator should open the play URL and keep it open.",
+        "Create a new game in the creator's account. Optionally writes SPAWN_VARIANT_ID to .env. Creator should open the play URL and keep it " +
+        "open. The engine a new world is pinned to is the platform's choice, not an argument here — the result reports which lane it landed on, " +
+        "and spawn_init then provisions for that lane (a clone on 6.0+, a scaffold on pre-6.0).",
       inputSchema: {
         projectDir: projectDirSchema,
         setVariant: z
@@ -411,10 +645,26 @@ export function registerTools(server: McpServer): void {
         upsertEnv(dir, { SPAWN_VARIANT_ID: json.variantId });
         ensureGitignore(dir);
       }
+
+      // Which lane the new world landed on decides what spawn_init will do, so
+      // answer it here rather than leaving the next tool to discover it.
+      let engine: Record<string, unknown> | undefined;
+      if (setVariant && json?.variantId) {
+        try {
+          engine = engineSummary(await resolveEngine(dir, loadEnv(dir)));
+        } catch {
+          /* the game exists either way; spawn_init will detect it */
+        }
+      }
+
       return text({
         ...json,
-        playUrlAbsolute: `${env.apiUrl}${json.playUrl ?? ""}`,
+        playUrlAbsolute: absoluteUrl(env.apiUrl, json.playUrl),
         variantWritten: Boolean(setVariant && json?.variantId),
+        ...(engine ? { engine } : {}),
+        next: setVariant
+          ? "spawn_init — it provisions for whichever lane this world is on."
+          : "spawn_set_variant with the variantId above, then spawn_init.",
       });
     }
   );
@@ -440,14 +690,32 @@ export function registerTools(server: McpServer): void {
     "spawn_init",
     {
       description:
-        "Scaffold a Spawn game project: gitignore secrets, world/ + scripts/, pull current spec → game.json, materialize scripts, fetch docs into .spawn/ (guide.md, tome-api.md, skills.json).",
-      inputSchema: { projectDir: projectDirSchema },
+        "Provision the project directory for this world — what that means depends on the engine, and this detects it. " +
+        "On engine 6.0+ (the git lane) the world's code IS a git repository: this CLONES it into projectDir (the agent token is the git " +
+        "password, supplied per-command and never written to .git/config), fetches the spawn notes ref, keeps .env and .spawn/ out of the " +
+        "tree via .git/info/exclude, and saves the docs. A non-empty directory that is not already this world's clone is refused rather " +
+        "than cloned over. On a pre-6.0 world (the document lane) it scaffolds as before: gitignore secrets, world/ + scripts/, pull " +
+        "current spec → game.json, materialize scripts. Either way the docs land in .spawn/ (guide.md, tome-api.md, skills.json).",
+      inputSchema: {
+        projectDir: projectDirSchema,
+        engineVersion: engineVersionSchema,
+        depth: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Engine 6.0+ only: how many commits of history to clone (default 20). A live world's full history is tens of thousands of " +
+              "objects and may not finish fetching at all, and nothing here needs it — editing, committing and pushing all work from the tip. " +
+              "Pass 0 for the full history (slow, and the only way to get `git log --notes=spawn`)."
+          ),
+      },
     },
-    async ({ projectDir }) => {
+    async ({ projectDir, engineVersion, depth }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
-      const result = await initProject(dir, env);
+      const result = await initProject(dir, env, engineVersion, depth);
       return result.ok ? text({ ok: true, ...result.summary }) : err(result.error);
     }
   );
@@ -456,34 +724,46 @@ export function registerTools(server: McpServer): void {
     "spawn_docs",
     {
       description:
-        "Fetch engine guide, tome API reference, and skills index. Optionally save under .spawn/. For just the skill menu with descriptions, spawn_skills is cheaper.",
+        "Fetch this world's guide, the Tome API reference, and the skills index — all matched to the engine version the world is pinned to, " +
+        "and this is also the cheapest authoritative answer to WHICH engine that is (era + semver come back in the result). On engine 6.0+ the " +
+        "guide IS the world's AGENTS.md: the tree grammar, the API in one screen, the git loop. On a pre-6.0 world it is the document lane's " +
+        "one paragraph. Optionally save under .spawn/. For just the skill menu with descriptions, spawn_skills is cheaper.",
       inputSchema: {
         projectDir: projectDirSchema,
         save: z.boolean().default(true).describe("Write guide.md, tome-api.md, skills.json under .spawn/"),
+        engineVersion: engineVersionSchema,
       },
     },
-    async ({ projectDir, save }) => {
+    async ({ projectDir, save, engineVersion }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
+      const resolved = await lane(dir, env, engineVersion);
+      if ("failure" in resolved) return resolved.failure;
+
       const { status, json } = await api(env, "GET", variantPath(env, "/agent/docs"));
       if (status !== 200) return err(`docs failed (${status}): ${json?.error}`);
-      if (save) {
-        saveFile(join(dir, ".spawn", "guide.md"), json.guide ?? "");
-        saveFile(join(dir, ".spawn", "tome-api.md"), json.tomeApi ?? "");
-        saveFile(join(dir, ".spawn", "skills.json"), JSON.stringify(json.skills ?? [], null, 2));
-      }
+      const savedTo = save ? writeDocs(dir, json, resolved.info.era) : null;
       return text({
+        engine: engineSummary(resolved.info),
+        // The docs endpoint is the authority on the pin, so echo its own reading
+        // beside the resolved lane rather than only the cached one.
         engineVersion: json.engineVersion,
+        era: json.era,
         specVersion: json.specVersion,
-        playUrl: `${env.apiUrl}${json.playUrl ?? ""}`,
+        // playUrl comes back absolute on the git lane and relative on the
+        // document lane; prefixing blindly produced a double origin.
+        playUrl: absoluteUrl(env.apiUrl, json.playUrl),
+        gitUrl: json.gitUrl ?? undefined,
+        codeUrl: json.codeUrl ?? undefined,
         skills: json.skills,
         errors: json.errors ?? [],
         saved: save,
+        savedTo: savedTo ?? undefined,
         guideChars: (json.guide ?? "").length,
         tomeApiChars: (json.tomeApi ?? "").length,
         note: save
-          ? "Full docs written to .spawn/ — read those files; this response omits the bodies."
+          ? `Full docs written to ${savedTo} — read those files; this response omits the bodies.`
           : "Pass save:true to write full bodies to disk.",
       });
     }
@@ -512,7 +792,7 @@ export function registerTools(server: McpServer): void {
     },
     async ({ projectDir, search, detail, refresh }) => {
       const dir = resolveProjectDir(projectDir);
-      const cachePath = join(dir, ".spawn", "skills.json");
+      const cachePath = join(stateDir(dir), "skills.json");
 
       let skills = refresh ? null : readSkillsCache(cachePath);
       let source = "cache";
@@ -572,7 +852,7 @@ export function registerTools(server: McpServer): void {
       const dir = resolveProjectDir(projectDir);
       const wanted = [...new Set([...(ids ?? []), ...(id ? [id] : [])].map((s) => s.trim()).filter(Boolean))];
       const menu = () => {
-        const cached = readSkillsCache(join(dir, ".spawn", "skills.json"));
+        const cached = readSkillsCache(join(stateDir(dir), "skills.json"));
         return cached
           ? `\n\nAvailable ids:\n${cached.map((s) => `  ${s.id} — ${s.name}`).join("\n")}`
           : "\n\nCall spawn_skills for the list of ids.";
@@ -611,9 +891,16 @@ export function registerTools(server: McpServer): void {
     "spawn_latest",
     {
       description:
-        "Pull a saved spec: head (mode=dev, default), published live (mode=live), an exact version, or a published updateSlug. Head pulls sync scripts (untouched fast-forward; both-changed → <file>.theirs) and update the base-version rail — use after version_conflict. Non-head pulls are read-only unless applyLocal:true (resets local rail to that snapshot). version and updateSlug are mutually exclusive.",
+        "Take upstream's work into your project. ON ENGINE 6.0+ (git lane) this is `git pull --rebase`: Savi, exec, and other clones commit " +
+        "to the same repo, so pull before you build and again after a refused push. A dirty tree is refused rather than stashed, and a " +
+        "rebase that collides is aborted with your commits intact and the colliding paths named. mode / version / updateSlug / applyLocal " +
+        "are document-lane concepts and are refused there. ON A PRE-6.0 WORLD (document lane) it is unchanged: pull a saved spec — head " +
+        "(mode=dev, default), published live (mode=live), an exact version, or a published updateSlug. Head pulls sync scripts (untouched " +
+        "fast-forward; both-changed → <file>.theirs) and update the base-version rail — use after version_conflict. Non-head pulls are " +
+        "read-only unless applyLocal:true. version and updateSlug are mutually exclusive.",
       inputSchema: {
         projectDir: projectDirSchema,
+        engineVersion: engineVersionSchema,
         mode: z
           .enum(["dev", "live"])
           .default("dev")
@@ -642,13 +929,61 @@ export function registerTools(server: McpServer): void {
           .describe("When applying: write pulled spec to game.json"),
       },
     },
-    async ({ projectDir, mode, version, updateSlug, applyLocal, saveGameJson }) => {
+    async ({ projectDir, mode, version, updateSlug, applyLocal, saveGameJson, engineVersion }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
 
       if (version != null && updateSlug) {
         return err("Pass version OR updateSlug, not both (API mutual exclusion).");
+      }
+
+      const resolved = await lane(dir, env, engineVersion);
+      if ("failure" in resolved) return resolved.failure;
+
+      if (isGitLane(resolved.info.era)) {
+        // Refused rather than ignored: silently dropping "give me the published
+        // live snapshot" would hand back the dev head and look like it worked.
+        const documentOnly = [
+          version != null ? "version" : null,
+          updateSlug ? "updateSlug" : null,
+          mode === "live" ? "mode=live" : null,
+          applyLocal !== undefined ? "applyLocal" : null,
+        ].filter(Boolean);
+        if (documentOnly.length) {
+          return err(
+            `${documentOnly.join(", ")} ${documentOnly.length > 1 ? "are" : "is"} document-lane only, and this world is on engine ` +
+              `${resolved.info.semver ?? resolved.info.era} — its history is git. Nothing was pulled. ` +
+              "Call spawn_latest with no arguments for `git pull --rebase`; for an older state, use git directly in the clone."
+          );
+        }
+
+        latchProject(dir, "spawn_latest (git pull)");
+        const check = await checkClone(dir, resolved.info);
+        if (!check.ok) return err(check.message);
+
+        const creds = await gitCreds(dir, env);
+        const pulled = await pullRebase(dir, creds);
+        if (!pulled.ok) {
+          return err(`${pulled.message}${pulled.paths.length ? `\n\nPaths: ${pulled.paths.join(", ")}` : ""}`);
+        }
+        const st = await gitStatus(dir);
+        return text({
+          engine: engineSummary(resolved.info),
+          pulled: true,
+          changed: pulled.changed,
+          from: pulled.before,
+          to: pulled.after,
+          files: pulled.files.slice(0, 50),
+          fileCount: pulled.files.length,
+          branch: st.branch,
+          ahead: st.ahead,
+          behind: st.behind,
+          note: pulled.changed
+            ? `Rebased onto origin — ${pulled.files.length} file(s) moved. Read what changed before building on top of it: ` +
+              "these commits are Savi's, the creator's, or another clone's, and `git log --notes=spawn` carries the world's own reading of each."
+            : "Already up to date with origin.",
+        });
       }
 
       const isHeadPull = mode === "dev" && version == null && !updateSlug;
@@ -743,13 +1078,38 @@ export function registerTools(server: McpServer): void {
     "spawn_validate",
     {
       description:
-        "Compile the project (game.json + world/*.json + scripts/**) and run authoritative server-side schema validation. Schema-valid is not the same as good: it says nothing about how the result looks or feels, which comes from the skills you loaded (spawn_skill) before writing the code.",
-      inputSchema: { projectDir: projectDirSchema },
+        "Check the project before pushing. ON ENGINE 6.0+ (git lane) there is no server-side validator — the push itself is the authority " +
+        "and refuses typed, naming the row, the line and the field — so this runs a LOCAL pre-flight over the tree instead: every script and " +
+        "template is ESM-parsed, .scene files are checked against the `# spawn-scene v2 yaml <cellKey>` header and their filename's cell key, " +
+        "image bytes are checked against their extension, and binaries under assets/ are caught (law.git.asset-kind refuses them). Clean here " +
+        "does NOT mean the push will land. ON A PRE-6.0 WORLD it is unchanged: compile the project and run authoritative server-side schema " +
+        "validation. Either way, valid is not the same as good — it says nothing about how the result looks or feels, which comes from the " +
+        "skills you loaded (spawn_skill) before writing the code.",
+      inputSchema: { projectDir: projectDirSchema, engineVersion: engineVersionSchema },
     },
-    async ({ projectDir }) => {
+    async ({ projectDir, engineVersion }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
+      const resolved = await lane(dir, env, engineVersion);
+      if ("failure" in resolved) return resolved.failure;
+
+      if (isGitLane(resolved.info.era)) {
+        const check = await checkClone(dir, resolved.info);
+        if (!check.ok) return err(check.message);
+        const report = await checkTree(dir);
+        const st = await gitStatus(dir);
+        const body =
+          `${formatTreeReport(report)}\n\n` +
+          `Working tree: ${st.clean ? "clean" : `${st.dirty.length} uncommitted change(s)`}` +
+          `${st.behind ? `, ${st.behind} behind origin (spawn_latest first)` : ""}` +
+          `${st.ahead ? `, ${st.ahead} unpushed commit(s)` : ""}.\n\n` +
+          "This is a LOCAL pre-flight, not a verdict: the authority on a 6.0 world is the push, which validates the whole tree " +
+          "server-side and answers with each room's verdict. Clean here only means the failures that can be seen without the engine " +
+          "are absent.";
+        return { content: [{ type: "text" as const, text: body }], isError: !report.ok };
+      }
+
       let spec: any;
       try {
         spec = compile(dir);
@@ -759,6 +1119,11 @@ export function registerTools(server: McpServer): void {
       const { status, json } = await api(env, "POST", variantPath(env, "/game-specs/validate"), {
         gameSpec: spec,
       });
+      // The world migrated to 6.0 since we last looked: the document lane has no
+      // validator for it, and the cached era is now wrong.
+      if (status === 409 && json?.code === "world_is_git") {
+        return gitLaneFrom409(env, resolved.info, json, "spawn_validate's server-side schema check");
+      }
       if (!json || status !== 200) {
         return err(`validate failed (${status}): ${json?.error ?? "unknown"}`);
       }
@@ -778,41 +1143,199 @@ export function registerTools(server: McpServer): void {
     "spawn_push",
     {
       description:
-        "Compile + push the project live (~1s in the creator's browser). Every push rebuilds the live room. On 409 version_conflict, call spawn_latest then merge .theirs receipts and push again. In team mode pushes are serialised and rebased onto head first, so a 409 is rare and a clean teammate push costs you nothing; a rebase that collides stops the push with your work intact. A successful push proves the spec parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: drawn-art, custom-materials, looks, game-ui).",
+        "Push your work live (~1s in every open room). The lane is detected from the world's engine. " +
+        "ON ENGINE 6.0+ (git lane) this stages, commits and git-pushes the clone: `message` is REQUIRED and is not a log line — its first " +
+        "line lands in the creator's chat and their changes list under your name, so write one plain sentence about what changed for the " +
+        "PLAYER (\"the getaway car keeps its grip on wet streets\"), never how you did it, never a file or a function; put the how in `body`, " +
+        "which is also where you leave Savi what she needs. The result carries the `remote:` verdict lines — rooms, players, and each room's " +
+        "reading of your change. A push refused as non-fast-forward means origin moved: spawn_latest, then push again. " +
+        "ON A PRE-6.0 WORLD (document lane) it is unchanged: compile the project and PUT the spec; on 409 version_conflict call spawn_latest, " +
+        "merge .theirs receipts and push again. In team mode document-lane pushes are serialised and rebased onto head first. " +
+        "Either way a successful push proves it parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if " +
+        "what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: " +
+        "drawn-art, custom-materials, looks, game-ui).",
       inputSchema: {
         projectDir: projectDirSchema,
-        dryRun: z.boolean().default(false),
+        engineVersion: engineVersionSchema,
+        message: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Engine 6.0+ ONLY, and required there: the commit's first line, which IS the creator's chat line. One plain sentence about what " +
+              'changed for the player — "the tram now stops at the north platform". Not a file, not a function, not a diagnosis. Ignored on the document lane.'
+          ),
+        body: z
+          .string()
+          .optional()
+          .describe(
+            "Engine 6.0+ only: the commit body — the how, and anything Savi needs. She reads it on the creator's next turn; there is no other door into her chat."
+          ),
+        dryRun: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Document lane: validate the push without saving. Git lane: run the local pre-flight and report what WOULD be committed, without committing or pushing."
+          ),
         force: z
           .boolean()
           .default(false)
-          .describe("Whole-replace without base-version rail / discard .theirs (destructive)"),
+          .describe("Document lane only: whole-replace without base-version rail / discard .theirs (destructive)"),
       },
     },
-    async ({ projectDir, dryRun, force }) => {
+    async ({ projectDir, dryRun, force, engineVersion, message, body }) => {
       const dir = resolveProjectDir(projectDir);
       latchProject(dir, "spawn_push");
       const env = loadEnv(dir);
       requireEnv(env, "SPAWN_API_URL", "SPAWN_AGENT_KEY", "SPAWN_VARIANT_ID");
 
+      const resolved = await lane(dir, env, engineVersion);
+      if ("failure" in resolved) return resolved.failure;
+      if (isGitLane(resolved.info.era)) {
+        return gitPush({ dir, env, info: resolved.info, message, body, dryRun, force });
+      }
+
       // A dry run touches nothing shared, so it never queues behind a teammate.
       const team = !dryRun ? teamContext(dir) : null;
-      const run = () => pushOnce({ dir, env, dryRun, force, team });
+      const run = () => pushOnce({ dir, env, info: resolved.info, dryRun, force, team });
       return team
         ? withLedgerLock(team.ledgerDir, run, PUSH_LOCK)
         : run();
     }
   );
 
+  /**
+   * The 6.0 write: stage, commit, push, and report what the rooms said.
+   *
+   * The local pre-flight runs first and BLOCKS on failure, because on this lane
+   * a push is live the moment it lands — there is no dev/live split to absorb a
+   * broken tree, and people may be standing in the world while it happens.
+   */
+  async function gitPush({
+    dir,
+    env,
+    info,
+    message,
+    body,
+    dryRun,
+    force,
+  }: {
+    dir: string;
+    env: SpawnEnv;
+    info: EngineInfo;
+    message?: string;
+    body?: string;
+    dryRun: boolean;
+    force: boolean;
+  }) {
+    if (force) {
+      return err(
+        "force is a document-lane concept (whole-replace over the base-version rail) and there is no safe equivalent here — " +
+          "on a git world it would mean a force-push, and the server never force-pushes or merges. Nothing was written. " +
+          "If origin has moved, run spawn_latest to rebase onto it."
+      );
+    }
+
+    const check = await checkClone(dir, info);
+    if (!check.ok) return err(check.message);
+
+    const st = await gitStatus(dir);
+    if (st.clean && st.ahead === 0) {
+      return err("Nothing to push: the working tree is clean and no local commit is ahead of origin.");
+    }
+
+    // A 6.0 push is `git add -A`, so anything left lying in the project dir
+    // would become part of the world. Refuse rather than commit it: a
+    // screenshot or a stray credential landing in a live world is not
+    // something the agent would notice, and not something a pull undoes.
+    const strangers = strangersIn(st.dirty);
+    if (strangers.length) {
+      return err(
+        "Not pushed — these are this session's files, not the world's, and a push would commit them into it:\n" +
+          strangers.map((p) => `  ${p}`).join("\n") +
+          "\n\nMove or delete them, then push. (Screenshots and caches belong under .git/spawn-mcp/, " +
+          "which is never part of the tree.)"
+      );
+    }
+
+    // Only what this push would actually carry — a whole-tree parse on every
+    // push would bill the agent for files it has not touched.
+    const scope = st.dirty.length ? st.dirty : undefined;
+    const report = await checkTree(dir, scope);
+    if (!report.ok) {
+      return err(
+        `Not pushed — the local pre-flight failed, and a push on this lane is live in every open room the moment it lands.\n\n${formatTreeReport(report)}`
+      );
+    }
+
+    if (dryRun) {
+      return text({
+        engine: engineSummary(info),
+        dryRun: true,
+        wouldCommit: st.dirty,
+        unpushedCommits: st.ahead,
+        behind: st.behind,
+        preflight: report.checked,
+        note:
+          `${formatTreeReport(report)} Nothing was committed or pushed.` +
+          (st.behind ? ` origin is ${st.behind} commit(s) ahead — run spawn_latest first.` : ""),
+      });
+    }
+
+    if (!message?.trim()) {
+      return err(
+        "message is required on the git lane. Its first line lands in the creator's chat and their changes list under your name, " +
+          'so it is a sentence about what changed for the player — "the north gate opens when both levers are pulled" — not a file, ' +
+          "a function, or a diagnosis. Put the how in `body`."
+      );
+    }
+
+    const creds = await gitCreds(dir, env);
+    const pushed = await commitAndPush(dir, creds, { message: message.trim(), body });
+    if (!pushed.ok) {
+      return err(
+        pushed.stage === "push" && pushed.behind
+          ? pushed.message
+          : `${pushed.message}\n\nNothing reached the world.`
+      );
+    }
+
+    return text({
+      engine: engineSummary(info),
+      ok: true,
+      committed: pushed.committed,
+      sha: pushed.sha,
+      // The subject that actually landed, which is not the `message` argument
+      // when this pushed a commit a previous refusal had already made.
+      message: pushed.subject,
+      files: pushed.files.slice(0, 50),
+      fileCount: pushed.files.length,
+      // The rooms' own reading of the change — the closest thing this lane has
+      // to a validation result, and the only report of who was standing in it.
+      verdicts: pushed.verdicts,
+      ...(pushed.note ? { spawnNote: pushed.note } : {}),
+      playUrl: absoluteUrl(env.apiUrl, info.playUrl),
+      note:
+        (pushed.committed
+          ? ""
+          : "Pushed a commit that already existed locally (usually one a refused push left behind) — nothing new was committed. ") +
+        "Live in every open room. The verdict lines above are the rooms' reading of the push, not proof the world is good — " +
+        "open spawn_play_open and spawn_play_screenshot and judge the frame before calling it done.",
+    });
+  }
+
   /** The push itself, run under the team push lock when there is a team. */
   async function pushOnce({
     dir,
     env,
+    info,
     dryRun,
     force,
     team,
   }: {
     dir: string;
     env: ReturnType<typeof loadEnv>;
+    info: EngineInfo;
     dryRun: boolean;
     force: boolean;
     team: TeamContext | null;
@@ -868,6 +1391,11 @@ export function registerTools(server: McpServer): void {
         ...(dryRun ? { dryRun: true } : {}),
       });
 
+      // The world became a git world since this session last looked. Not a
+      // conflict — a lane change, and the document push never reached it.
+      if (status === 409 && json?.code === "world_is_git") {
+        return gitLaneFrom409(env, info, json, "spawn_push's whole-document PUT");
+      }
       if (status === 409) {
         const current = json?.currentVersion;
         const owner =
@@ -928,7 +1456,7 @@ export function registerTools(server: McpServer): void {
             }
           : {}),
         ...(trespasses.length ? { claimWarnings: trespasses } : {}),
-        playUrl: json.playUrl ? `${env.apiUrl}${json.playUrl}` : undefined,
+        playUrl: absoluteUrl(env.apiUrl, json.playUrl),
         rooms: json.rooms,
         roomsError: json.roomsError,
         preExistingDebt: json.issues,
@@ -940,7 +1468,7 @@ export function registerTools(server: McpServer): void {
     "spawn_exec",
     {
       description:
-        "Run a read-only JavaScript snippet against the live room (e.g. query objects, read an object's state). Pushing is the only write path. Needs a LIVE ROOM — rooms exist only while a player is connected, so open spawn_play_open first or you get a 5xx. `api.sql` is NOT available here at all (the endpoint is read-only server-side and refuses SQL outright, even SELECT) — there is no way to read the game database through this server.",
+        "Run a read-only JavaScript snippet against the live room (e.g. query objects, read an object's state). Pushing is the only write path. Needs a LIVE ROOM, and a room boots for a PLAYER, never for a door: the cheapest way to get one is spawn_client_join, which stands your own body in the world with no browser and no GPU (spawn_play_open boots one too, and is the right call when you need to SEE rather than query). Without either you get 409 no_live_room or a 5xx. `api.sql` is NOT available here at all (the endpoint is read-only server-side and refuses SQL outright, even SELECT) — there is no way to read the game database through this server.",
       inputSchema: {
         script: z
           .string()
@@ -969,7 +1497,9 @@ export function registerTools(server: McpServer): void {
   server.registerTool(
     "spawn_logs",
     {
-      description: "Variant logs + live room script logs. Use when behavior doesn't match what you pushed.",
+      description:
+        "Variant logs + live room script logs. Use when behavior doesn't match what you pushed — script syntax and runtime "  +
+        "errors surface here, not in a push receipt. Needs a live room: spawn_client_join stands your own body and boots one without a browser.",
       inputSchema: { projectDir: projectDirSchema },
     },
     async ({ projectDir }) => {
@@ -985,7 +1515,9 @@ export function registerTools(server: McpServer): void {
   server.registerTool(
     "spawn_rooms",
     {
-      description: "Active rooms + player counts for the current variant.",
+      description:
+        "Active rooms + player counts for the current variant, and the room exec/logs will target. An empty list is a room you can "  +
+        "boot yourself: spawn_client_join puts your body in the world and it appears here while the body stands.",
       inputSchema: { projectDir: projectDirSchema },
     },
     async ({ projectDir }) => {
@@ -1051,6 +1583,20 @@ export function registerTools(server: McpServer): void {
       const { status, json } = await api(env, "POST", variantPath(env, "/studio-chat/notify"), {
         message: composed,
       });
+      // The door is now closed by ACCOUNT CLASS: a standalone agent account
+      // (sak_ from /signup) can never wake Savi, linked or not, while a human's
+      // personal token still can. Reported as itself rather than a bare 403,
+      // because retrying and re-wording both fail forever.
+      if (status === 403 && json?.error === "agent_lane_closed") {
+        return err(
+          "Savi's lane is closed to this token: she is only woken by a person's own token, never by an agent account. " +
+            (json?.verdict ? `${json.verdict} ` : "") +
+            "Nothing was sent, and no wording or retry opens it.\n\n" +
+            "Your work still reaches her — on a 6.0 world every push lands in the creator's chat as a commit row she reads on their " +
+            "next turn, so put what she needs in the commit message body (spawn_push `body`). To hand her a TASK, ask the creator to " +
+            "ask her; spawn_savi_status still shows what her sub-agents are doing."
+        );
+      }
       if (status !== 200) return err(`savi failed (${status}): ${json?.error}`);
       // Gate on the same predicate renderHandoff uses: a whitespace-only task
       // composes no ask, and reporting one would leave the model waiting on
@@ -1109,16 +1655,20 @@ export function registerTools(server: McpServer): void {
     "spawn_status",
     {
       description:
-        "Local project status plus optional remote head/published versions: env (masked), base version, conflict receipts, docs present, headVersion vs publishedVersion when credentials allow.",
+        "Where this project stands. Always reports env (masked), credential source, docs present, and — once credentials allow — the world's " +
+        "ENGINE (era + semver), which decides everything else. On engine 6.0+ the remote block is git: branch, HEAD, how many commits ahead of " +
+        "and behind origin, and the uncommitted files. On a pre-6.0 world it is the version rail: base version, conflict receipts, headVersion " +
+        "vs publishedVersion.",
       inputSchema: {
         projectDir: projectDirSchema,
+        engineVersion: engineVersionSchema,
         remote: z
           .boolean()
           .default(true)
-          .describe("When credentials exist, also fetch head + published (mode=live) versions"),
+          .describe("When credentials exist, also read the remote (git divergence, or head + published versions)"),
       },
     },
-    async ({ projectDir, remote }) => {
+    async ({ projectDir, remote, engineVersion }) => {
       const dir = resolveProjectDir(projectDir);
       const env = loadEnv(dir);
       const localBaseVersion = readBaseVersion(dir);
@@ -1139,9 +1689,9 @@ export function registerTools(server: McpServer): void {
         hasSpecRail: readBaseGame(dir) !== null,
         conflictReceipts,
         hasGameJson: existsSync(join(dir, "game.json")),
-        hasGuide: existsSync(join(dir, ".spawn", "guide.md")),
-        hasTomeApi: existsSync(join(dir, ".spawn", "tome-api.md")),
-        hasSkills: existsSync(join(dir, ".spawn", "skills.json")),
+        hasGuide: existsSync(join(stateDir(dir), "guide.md")),
+        hasTomeApi: existsSync(join(stateDir(dir), "tome-api.md")),
+        hasSkills: existsSync(join(stateDir(dir), "skills.json")),
       };
 
       const team = teamContext(dir);
@@ -1165,6 +1715,53 @@ export function registerTools(server: McpServer): void {
         status.remote = remote
           ? { skipped: true, reason: "Need SPAWN_API_URL, SPAWN_AGENT_KEY, SPAWN_VARIANT_ID" }
           : { skipped: true, reason: "remote:false" };
+        return text(status);
+      }
+
+      const resolved = await lane(dir, env, engineVersion);
+      if ("failure" in resolved) return resolved.failure;
+      status.engine = engineSummary(resolved.info);
+
+      if (isGitLane(resolved.info.era)) {
+        // The base-version rail and the .theirs receipts describe the document
+        // lane. Reporting them for a git world would be answering a question
+        // nobody asked with numbers that mean nothing here.
+        delete status.baseVersion;
+        delete status.hasSpecRail;
+        delete status.conflictReceipts;
+        delete status.hasGameJson;
+
+        if (!(await isGitRepo(dir))) {
+          status.remote = {
+            skipped: true,
+            reason: `${dir} is not a clone of this world — run spawn_init.`,
+            gitUrl: resolved.info.gitUrl,
+          };
+          return text(status);
+        }
+        const check = await checkClone(dir, resolved.info);
+        const st = await gitStatus(dir);
+        status.remote = {
+          lane: laneName(resolved.info.era),
+          gitUrl: resolved.info.gitUrl,
+          ...(check.ok ? {} : { warning: check.message }),
+          branch: st.branch,
+          upstream: st.upstream,
+          head: st.head,
+          headSubject: st.headSubject,
+          ahead: st.ahead,
+          behind: st.behind,
+          uncommitted: st.dirty,
+          spawnNote: await spawnNote(dir),
+          note:
+            st.behind > 0
+              ? `origin is ${st.behind} commit(s) ahead — spawn_latest to rebase onto it before pushing.`
+              : st.dirty.length
+                ? `${st.dirty.length} uncommitted change(s) — spawn_push with a message commits and pushes them live.`
+                : st.ahead > 0
+                  ? `${st.ahead} commit(s) not yet pushed — spawn_push sends them.`
+                  : "In sync with origin.",
+        };
         return text(status);
       }
 

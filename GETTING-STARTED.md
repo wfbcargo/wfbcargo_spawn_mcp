@@ -18,12 +18,13 @@ That last part is the interesting bit. Without this, an AI can write game code b
 
 ## Before you start
 
-You'll need four things:
+You'll need five things:
 
 1. **A Spawn account.** Sign up at [spawn.co](https://www.spawn.co).
 2. **An AI coding assistant that supports MCP.** Cursor, Claude Code, Claude Desktop, or another MCP-compatible tool.
 3. **Node.js version 18 or newer.** Get it from [nodejs.org](https://nodejs.org). To check if you already have it, open a terminal and run `node --version`.
-4. **A terminal.** On Windows that's PowerShell or Command Prompt; on Mac it's Terminal. You'll only need it for the one-time setup below.
+4. **Git.** Get it from [git-scm.com](https://git-scm.com). Games on Spawn 6 (the current engine) *are* git repositories, so your assistant needs it to work on one. Check with `git --version`.
+5. **A terminal.** On Windows that's PowerShell or Command Prompt; on Mac it's Terminal. You'll only need it for the one-time setup below.
 
 ## Step 1: Install (one time, ~2 minutes)
 
@@ -43,6 +44,14 @@ npm run setup
 ```
 
 That downloads a copy of Chrome for the assistant to play your game in. It's about 150MB and takes a minute. You can skip it and add it later; everything else works without it.
+
+Optionally, if you'd like your assistant to be able to stand in your game as a **player** — walk around, stand next to you, and check what's actually happening in the room — install [Bun](https://bun.sh):
+
+```bash
+npm install -g bun
+```
+
+That's a different thing from the browser above, and both are worth having. The browser is your assistant's *eyes*: it's the only way to judge whether the game looks good. A body is how it *checks and plays* — and a room only wakes up when a player is in it, so with a body standing your assistant can ask the running game questions without opening a window at all.
 
 Finally, note where this folder lives. Run `pwd` (Mac/Linux) or `cd` (Windows) and copy the path. You'll need it in the next step. It'll look something like `/Users/you/wfbcargo_spawn_mcp` or `C:/Users/you/wfbcargo_spawn_mcp`.
 
@@ -117,7 +126,11 @@ Now just ask:
 
 > *"Create a new Spawn game and set up the project."*
 
-Your assistant will create the game, scaffold the folders, and download Spawn's engine documentation so it knows how the world works. It'll give you a link to open your game in the browser. Keep that tab open; it updates live.
+Your assistant will create the game, set up the folder, and download Spawn's engine documentation so it knows how the world works. It'll give you a link to open your game in the browser. Keep that tab open; it updates live.
+
+Depending on which version of the Spawn engine your game is on, "set up the folder" means one of two things, and your assistant works out which without being told. On **Spawn 6**, your game *is* a git repository, so it clones it — and from then on every change it makes is a commit, pushed straight to the live world. On **older games** it creates the project files locally and uploads the whole thing each time. Either way you ask for the same things and get the same result; the difference only shows up if you go looking in the folder.
+
+> **On Spawn 6, the message on each change is not just for your assistant.** The first line of every push lands in your Spawn chat, under your assistant's name, next to whatever you and Savi have been saying. So it should read like a sentence about the game — *"the tram now stops at the north platform"* — not like a technical note. Your assistant is told this, but it's worth knowing why those lines show up where they do.
 
 Then start building:
 
@@ -193,4 +206,4 @@ The technical detail is in the README's [Trust model](README.md#trust-model) sec
 ## Where to go next
 
 - [README](README.md) has the full tool list and the technical reference.
-- Once your assistant has run the setup step, it downloads Spawn's own guides into a `.spawn/` folder in your game. Ask it: *"What can the Spawn engine actually do?"* and it'll tell you from those.
+- Once your assistant has run the setup step, it downloads Spawn's own guides into your game folder — `.spawn/` on an older game, a hidden `.git/spawn-mcp/` on Spawn 6, where they can't get mixed up with the world's own files. A Spawn 6 game also has an `AGENTS.md` at the top of the folder, written for that specific world. Ask your assistant: *"What can the Spawn engine actually do?"* and it'll tell you from those.
