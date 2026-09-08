@@ -218,17 +218,22 @@ Only on **engine 6.0+ worlds**; the document lane behaves exactly as it did.
 ### Known upstream bugs
 
 Both are in Spawn's packaged client, not in this server; both are reported here because the errors
-are otherwise very hard to read.
+are otherwise very hard to read. Each is tracked as an issue carrying the repro, the exact cause and
+a suggested patch, because the package's declared tracker (`earth-kiln/main`) is private:
+[#5](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/5) and
+[#6](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/6).
 
-- **`spawn client run` does not work on Windows.** The session shell validates `scriptPath` as
-  POSIX-absolute, so a `C:\…` path is refused — and `-e` fails identically, because it writes the
+- **`spawn client run` does not work on Windows**
+  ([#6](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/6)). The session shell validates
+  `scriptPath` as POSIX-absolute, so a `C:\…` path is refused — and `-e` fails identically, because it writes the
   source to a temp file and passes that same path. Play scripts are therefore unavailable on Windows
   entirely. `spawn_client` detects the signature and says it is the client's bug rather than
   reporting it as the script's fault. Every other verb works: `where`, `players`, `inputs`, `move`,
   `look`, `witness`, `crossing`, `screenshot`.
-- **The loader in `@spawnco/client` 0.2.0 passes a bare Windows path to `import()`** when run under
-  Node (`ERR_UNSUPPORTED_ESM_URL_SCHEME: Received protocol 'c:'`). Under Bun it does not bite, so
-  this server's Bun requirement routes around it.
+- **`@spawnco/client` 0.2.0 passes a bare Windows path to `import()`** when run under Node
+  (`ERR_UNSUPPORTED_ESM_URL_SCHEME: Received protocol 'c:'`), which stops every client verb before
+  it starts ([#5](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/5)). Under Bun it does not
+  bite, so this server's Bun requirement routes around it.
 
 ### Verified against a live world
 

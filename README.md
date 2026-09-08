@@ -103,10 +103,15 @@ used when present.
 | `SPAWN_CLIENT_ENTRY` | Path to `@spawnco/client`'s `bin/spawn.mjs`, to pin a copy |
 | `SPAWN_CLIENT_TIMEOUT_MS` | Abort a client command that hangs (default `120000`) |
 
-> **Known upstream bug: `spawn client run` does not work on Windows.** The session shell validates
+> **Known upstream bug: `spawn client run` does not work on Windows**
+> ([#6](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/6)). The session shell validates
 > `scriptPath` as POSIX-absolute, so a `C:\…` path is refused — and `-e` fails identically, because
 > it writes the source to a temp file and passes that path. `spawn_client` detects this and says so
 > rather than reporting it as your script's fault. Every other verb works on Windows.
+>
+> Running the client under **Node** on Windows fails earlier still, for a related path bug
+> ([#5](https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/5)) — which is part of why these tools
+> require Bun. Both issues carry the cause and a suggested patch; neither is fixable from here.
 
 ### Play browser rules
 

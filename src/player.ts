@@ -57,7 +57,9 @@ function firstExisting(candidates: string[]): string | null {
  * The client's session shell is spawned as `bun <entry>` — literally, that
  * string is in the client — so Bun is not a preference here, it is the runtime
  * the shell is launched with. Running the CLI under Node gets as far as
- * "shell process failed to spawn (no pid)".
+ * "shell process failed to spawn (no pid)", and on Windows it does not even
+ * reach that: the client imports its session library by OS path, which `import()`
+ * refuses. https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/5
  */
 export function resolveBun(): string {
   const explicit = process.env.SPAWN_BUN_BIN?.trim();
@@ -208,6 +210,9 @@ export function output(result: ClientResult): string {
  * `C:\…` path is refused — and `-e` inline hits it too, because it writes the
  * source to a temp file and passes that same path. Detected by the message
  * rather than by platform, so it stops being reported the moment it is fixed.
+ *
+ * Cause, repro and a suggested patch:
+ * https://github.com/wfbcargo/wfbcargo_spawn_mcp/issues/6
  */
 export function isWindowsScriptPathBug(text: string): boolean {
   // The drive letter sits mid-line, inside the quoted path the client echoes
