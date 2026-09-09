@@ -19,6 +19,7 @@ import {
   type Shot,
 } from "./browser.js";
 import { resolveProjectDir } from "./env.js";
+import { stateDir } from "./engine.js";
 import { latchProject } from "./team.js";
 import { renderFleetLine, summarizeFleet, type FleetReport } from "./wisps.js";
 
@@ -220,8 +221,11 @@ export function registerPlayTools(server: McpServer): void {
     async ({ projectDir, save, fullPage, format, quality }) => {
       try {
         const dir = resolveProjectDir(projectDir);
+        // stateDir, not a fixed ".spawn": on a 6.0 world that directory is part
+        // of the world's tracked tree, and a screenshot dropped there would be
+        // swept into the next push by `git add -A`.
         const savePath = save
-          ? join(dir, ".spawn", "screenshots", `play-${Date.now()}.${format === "png" ? "png" : "jpg"}`)
+          ? join(stateDir(dir), "screenshots", `play-${Date.now()}.${format === "png" ? "png" : "jpg"}`)
           : undefined;
         const shot = await screenshot({ fullPage, savePath, format, quality });
         const sess = getSession();

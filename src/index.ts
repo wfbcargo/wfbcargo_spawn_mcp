@@ -6,7 +6,8 @@ import { registerAssetTools } from "./asset-tools.js";
 import { registerAuditTools } from "./audit-tools.js";
 import { closePlay } from "./browser.js";
 import { registerPlayTools } from "./play-tools.js";
-import { SESSION_GUIDE } from "./session.js";
+import { registerPlayerTools } from "./player-tools.js";
+import { LANE_GUIDE, SESSION_GUIDE } from "./session.js";
 import { initTeamMode } from "./team.js";
 import { registerTeamTools } from "./team-tools.js";
 import { registerTools } from "./tools.js";
@@ -28,14 +29,16 @@ server.registerPrompt(
   "spawn_session",
   {
     description:
-      "How to work on a Spawn game via this MCP: bootstrap → game → init → edit → push → play/screenshot → fix (includes multi-agent).",
+      "How to work on a Spawn game via this MCP: bootstrap → game → init → edit → push → play/screenshot → fix. Covers both engine lanes (6.0 git worlds and pre-6.0 document worlds) and multi-agent.",
     argsSchema: {},
   },
   async () => ({
     messages: [
       {
         role: "user" as const,
-        content: { type: "text" as const, text: SESSION_GUIDE },
+        content: { type: "text" as const, text: `${SESSION_GUIDE}
+
+${LANE_GUIDE}` },
       },
     ],
   })
@@ -47,6 +50,7 @@ const team = initTeamMode();
 
 registerTools(server);
 registerPlayTools(server);
+registerPlayerTools(server);
 registerAssetTools(server);
 registerAuditTools(server);
 if (team.enabled) registerTeamTools(server);
