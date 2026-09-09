@@ -2,7 +2,7 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2026-09-06
+## [2.0.0] - 2026-09-09
 
 **Spawn 6 support.** Spawn 6 is not a new version of the thing this server talked to — it is a
 different write path, and 1.x could not reach it at all. A 6.0 world's code is a git repository, and
