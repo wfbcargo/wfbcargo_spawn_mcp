@@ -359,7 +359,7 @@ async function initGitWorld(
       // that directory belongs to the world.
       docsDir: home,
       branch: st.branch,
-      head: st.head,
+      head: st.headShort,
       headSubject: st.headSubject,
       specVersion: docs.json.specVersion,
       playUrl: absoluteUrl(env.apiUrl, docs.json.playUrl),
@@ -979,10 +979,13 @@ export function registerTools(server: McpServer): void {
           branch: st.branch,
           ahead: st.ahead,
           behind: st.behind,
-          note: pulled.changed
-            ? `Rebased onto origin — ${pulled.files.length} file(s) moved. Read what changed before building on top of it: ` +
-              "these commits are Savi's, the creator's, or another clone's, and `git log --notes=spawn` carries the world's own reading of each."
-            : "Already up to date with origin.",
+          note: !pulled.changed
+            ? "Already up to date with origin."
+            : pulled.files.length === 0
+              ? "Rebased onto origin. New commits arrived but the tree is byte-identical — nothing to re-read. " +
+                "(A world's own bookkeeping commits, e.g. re-measuring cell costs, often land this way.)"
+              : `Rebased onto origin — ${pulled.files.length} file(s) moved. Read what changed before building on top of it: ` +
+                "these commits are Savi's, the creator's, or another clone's, and `git log --notes=spawn` carries the world's own reading of each.",
         });
       }
 
@@ -1747,7 +1750,7 @@ export function registerTools(server: McpServer): void {
           ...(check.ok ? {} : { warning: check.message }),
           branch: st.branch,
           upstream: st.upstream,
-          head: st.head,
+          head: st.headShort,
           headSubject: st.headSubject,
           ahead: st.ahead,
           behind: st.behind,

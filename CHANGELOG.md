@@ -143,6 +143,18 @@ Only on **engine 6.0+ worlds**; the document lane behaves exactly as it did.
   already existed (usually one a refused push left behind), it reports the real HEAD subject and
   says nothing new was committed, rather than echoing back the `message` argument.
 
+- **`spawn_latest` reported a no-op pull as a change.** `git rev-parse --short` picks its length
+  from the repo's object count, so the same commit abbreviates to 7 characters in a fresh clone and
+  8 once a fetch has brought more objects in. Comparing those strings made an unchanged HEAD read as
+  a change — `changed: true` beside `0 file(s) moved`. Comparisons now use the full sha and only the
+  display fields are abbreviated. Caught by re-verifying against the live world a few days after the
+  clone, which is exactly how long it took the abbreviation to grow.
+
+- **A pull that moves HEAD without changing the tree now says so.** A world commits its own
+  bookkeeping (re-measuring cell costs, for instance), and those can land as real commits whose net
+  diff is empty. "Rebased onto origin — 0 file(s) moved" was accurate but read like a bug; it now
+  says the tree is byte-identical and there is nothing to re-read.
+
 ### Security
 
 - **The git credential never lands anywhere durable.** The helper is passed per-invocation with

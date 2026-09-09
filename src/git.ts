@@ -153,7 +153,14 @@ export type GitStatus = {
   behind: number;
   dirty: string[];
   clean: boolean;
+  /**
+   * The FULL sha. Comparisons must use this: `rev-parse --short` picks its
+   * length from the repo's object count, so the same commit can abbreviate to
+   * 7 characters before a fetch and 8 after it — which read as a change.
+   */
   head: string | null;
+  /** The abbreviated sha, for display only. */
+  headShort: string | null;
   headSubject: string | null;
 };
 
@@ -178,7 +185,8 @@ export async function status(dir: string): Promise<GitStatus> {
   const aheadMatch = header.match(/ahead (\d+)/);
   const behindMatch = header.match(/behind (\d+)/);
 
-  const head = (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout.trim() || null;
+  const head = (await git(dir, ["rev-parse", "HEAD"])).stdout.trim() || null;
+  const headShort = (await git(dir, ["rev-parse", "--short", "HEAD"])).stdout.trim() || null;
   const headSubject = (await git(dir, ["log", "-1", "--pretty=%s"])).stdout.trim() || null;
 
   return {
@@ -189,6 +197,7 @@ export async function status(dir: string): Promise<GitStatus> {
     dirty,
     clean: dirty.length === 0,
     head,
+    headShort,
     headSubject,
   };
 }
@@ -404,6 +413,7 @@ export async function pullRebase(dir: string, creds: GitCreds): Promise<PullResu
   }
 
   const beforeSha = before.head;
+  const beforeShort = before.headShort;
   const r = await git(dir, ["pull", "--rebase", "--no-autostash"], creds);
   if (!r.ok) {
     const detail = (r.stderr || r.stdout).trim();
@@ -443,8 +453,8 @@ export async function pullRebase(dir: string, creds: GitCreds): Promise<PullResu
   return {
     ok: true,
     changed: beforeSha !== after.head,
-    before: beforeSha,
-    after: after.head,
+    before: beforeShort,
+    after: after.headShort,
     files,
     output: (r.stdout + r.stderr).trim(),
   };
@@ -559,7 +569,7 @@ export async function commitAndPush(
   return {
     ok: true,
     committed,
-    sha: after.head,
+    sha: after.headShort,
     // When nothing was committed this call pushed a commit that already
     // existed — usually one a refused push left behind. Echoing the `message`
     // argument would report a subject that is not what landed.

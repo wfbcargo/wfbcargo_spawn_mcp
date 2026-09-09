@@ -265,3 +265,24 @@ describe("strangersIn", () => {
     );
   });
 });
+
+describe("status sha fields", () => {
+  it("reports a full sha for comparison and a short one for display", async () => {
+    // `rev-parse --short` picks its length from the repo's object count, so the
+    // same commit abbreviates to 7 characters in a small clone and 8 in a bigger
+    // one. Comparing those strings made an unchanged HEAD read as a change:
+    // spawn_latest reported "changed: true … 0 file(s) moved" after a no-op pull.
+    const dir = await repo();
+    const st = await status(dir);
+    assert.equal(st.head?.length, 40, "head must be the full sha");
+    assert.ok(st.headShort && st.headShort.length < 40, "headShort must be abbreviated");
+    assert.ok(st.head?.startsWith(st.headShort!), "the short sha must be a prefix of the full one");
+  });
+
+  it("gives the same full sha across calls, whatever the abbreviation does", async () => {
+    const dir = await repo();
+    const a = await status(dir);
+    const b = await status(dir);
+    assert.equal(a.head, b.head);
+  });
+});
