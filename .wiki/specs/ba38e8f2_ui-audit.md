@@ -162,7 +162,7 @@ Verified 2026-09-10 from the site's own filter markup:
 Spec B (wiring) references this surface and must not invent it. Frozen here:
 
 ```ts
-export type UiVerdict = "present" | "thin" | "missing";
+export type UiVerdict = "found" | "missing";   // AMENDED — see the amendment below
 export type UiFinding = {
   id: string;            // element slug
   label: string;
@@ -240,6 +240,68 @@ tests cover it, platform-gated on the ability to create directory junctions.
 Recorded in the 2.2.0 CHANGELOG entry rather than as a patch release: neither 2.1.0 nor
 2.2.0 had been tagged or published, so a 2.2.1 would have implied 2.2.0 shipped with the
 bug.
+
+## Amendment — the `present` verdict is withdrawn (post-review, orchestrator-authorised)
+
+Review found the three-verdict scheme unsound, and the fix is to claim less rather than
+to detect harder.
+
+**What was wrong.** `present` required an "art signal" — a `cdn/` path, colour literal,
+font, or material call — anywhere in a file that cited the surface. Two independent
+defects, both reproduced:
+
+- **UI-C1.** Six of the 21 ids are ordinary programming words, and the id is itself a
+  needle matching a bare token anywhere in a line. `items.map(i => i.name)` plus
+  `'#ff0000'` anywhere in the same file scored `map` as **present**. Likewise
+  `let loading = false`, `export const settings = {…}`, `// while in game`,
+  `store(k, v)`, `let progress = 0`. `settings`, `loading` and `in-game` are baseline
+  surfaces, so this fired on the default no-manifest path.
+- **UI-C2.** The document-lane corpus collected only `id`/`name`/`type` values, so
+  `hasArtSignal` only ever saw a newline-joined identifier list — which by construction
+  cannot hold a colour, a font, or a `cdn/` path. A pure-spec document-lane game could
+  **never** score `present`, while the identical JSON in a `.scene` file on the git lane
+  did. Two lanes disagreeing about the same game is R-005.
+
+**Why not just fix the detection.** A false `present` is the worst outcome this design
+can produce — the module header says so — because it removes a surface from both MISSING
+and THIN, so a screen that does not exist never reaches the report, the brief, or the
+conductor backlog. Any text heuristic sharp enough to be trusted here would be claiming
+to see a rendered screen, which is exactly what R-001 forbids and what
+`spawn_play_screenshot` already does properly.
+
+**The new vocabulary. `UiVerdict = "found" | "missing"`.**
+
+| Verdict | Means |
+|---|---|
+| `missing` | No evidence anywhere in the corpus. |
+| `found` | The surface's name appears in a path or identifier. **Says nothing about whether the screen is built, complete, or styled.** |
+
+The art-signal machinery (`ART_SIGNALS`, `hasArtSignal`, `detectSurface`'s `artSignal`)
+is **deleted**, not disabled. The report's caveat becomes: *found means the name appears,
+not that the screen is built or styled — judge it with `spawn_play_screenshot`.*
+
+This keeps the tool pointed at the only question it can actually answer, which is the
+question it was built for: **what did you never build at all.**
+
+## Post-review defect fixes
+
+- **UI-C1** — a single-token needle matches **paths only**, never free text; multi-token
+  needles match both. A filename is deliberate naming; a bare word in a line is not. This
+  costs recall on games with unconventional naming, and that trade is the design's stated
+  preference: a false `missing` sends someone to build what exists, a false `found` hides
+  a gap.
+- **UI-C2** — the document lane feeds the whole non-`scripts` GameSpec body as a text
+  source, the way `src/assets.ts` already does with `JSON.stringify` to harvest `cdn/`
+  paths. Nested UI objects stop being invisible.
+- **UI-C3** — a cached engine reading no longer bypasses the refusal: the directory must
+  still look like the lane the cache names, or `scanUi` refuses. An empty report and
+  "this is not a Spawn project" must never look the same.
+- **UI-C4** — no line number is emitted for a synthetic source; a citation must name a
+  line that exists in a file.
+- **UI-C5** — an unknown slug names where it came from. Blaming `audit/ui.json` for a
+  tool argument is wrong when no such file exists.
+- **UI-C6** — `expect` is de-duplicated before scoring; duplicates inflated the headline.
+- **UI-C7** — the map-vs-mapping test asserted a weaker property than its name claimed.
 
 ## Out of scope
 
