@@ -15,3 +15,8 @@ spawn.mjs.ref
 .claude/settings.local.json
 .vscode/
 .idea/
+
+# ClaudeArchitect ephemera. .wiki/ is committed; these are not.
+.worktrees/
+.work-log/
+.review/
