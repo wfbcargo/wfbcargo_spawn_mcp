@@ -222,6 +222,25 @@ intent:
 are re-validated inside `scanUi` and not only in `loadUiManifest` — `scanUi` can be handed
 a manifest built outside the loader, as the tool in fact does.
 
+**Post-merge fix, on the epic branch (`3b5f2d5`).** The corpus stopped reusing `tree.ts`'s
+`walkTree` and grew its own `walkForCorpus`. `walkTree` stats rather than lstats, so it
+follows symlinks and keeps no visited set: measured on a tree whose `scripts/ui/loop` links
+back to `scripts/`, it returns **64 paths for one real file**, nested to depth 129 before
+the OS refuses the path — the corpus would read that file 64 times and cite it at 64
+absurd paths — and a link out of the project is read in too. Neither is fixable after the
+walk, since the duplicates are produced during it.
+
+`walkTree` itself is deliberately unchanged: it is also `spawn_validate`'s, and altering
+what gets syntax-checked before a push is a decision of its own. **That hazard therefore
+remains live for `spawn_validate` and is not closed by this epic** — it wants its own spec.
+
+Both lanes use the new walker (the document lane also walks for folded-out scripts). Two
+tests cover it, platform-gated on the ability to create directory junctions.
+
+Recorded in the 2.2.0 CHANGELOG entry rather than as a patch release: neither 2.1.0 nor
+2.2.0 had been tagged or published, so a 2.2.1 would have implied 2.2.0 shipped with the
+bug.
+
 ## Out of scope
 
 - Any network call, to interfaceingame.com or anywhere else.

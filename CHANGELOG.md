@@ -16,6 +16,16 @@ dispatches to Savi through the existing delegation loop. `renderBrief` stays pur
 missing-surface list arrives as an optional field the caller supplies, the same way
 `yourClaims` already does.
 
+**The UI corpus refuses symlinks.** `spawn_audit_ui` had been walking a game tree with the
+same helper `spawn_validate` uses, which follows links and keeps no visited set. On a tree
+whose `scripts/ui/loop` links back to `scripts/` that returns 64 paths for one real file,
+nested to depth 129 before the OS refuses the path — so the audit read that file 64 times
+and would have cited it at 64 absurd paths — and a link pointing outside the project was
+read in as well. The corpus now has its own walker that drops symlinked entries as it goes,
+matching what every other walker here already does. The shared helper is unchanged: it is
+also what checks a tree before a push, and changing what gets syntax-checked there is a
+decision of its own.
+
 ## [2.1.0] - 2026-09-10
 
 **`spawn_audit_ui`: a local, zero-network completeness check for a game's UI.** Reviewing
