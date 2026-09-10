@@ -21,10 +21,11 @@ same helper `spawn_validate` uses, which follows links and keeps no visited set.
 whose `scripts/ui/loop` links back to `scripts/` that returns 64 paths for one real file,
 nested to depth 129 before the OS refuses the path — so the audit read that file 64 times
 and would have cited it at 64 absurd paths — and a link pointing outside the project was
-read in as well. The corpus now has its own walker that drops symlinked entries as it goes,
-matching what every other walker here already does. The shared helper is unchanged: it is
-also what checks a tree before a push, and changing what gets syntax-checked there is a
-decision of its own.
+read in as well. The corpus now has its own walker that reads directory entries with lstat
+semantics and never descends into a link, matching what every other walker here already
+does. **The shared helper is unchanged and still has this defect** — it is also what checks
+a tree before a push, and changing what gets syntax-checked there is a decision of its own —
+so the fix is bounded to `spawn_audit_ui`; `spawn_validate` still follows links today.
 
 ## [2.1.0] - 2026-09-10
 
@@ -33,12 +34,13 @@ a build has meant asking every question through the same instrument — a headed
 a screenshot, a judgement call — even for a question that is really just counting. This
 one is: does a pause overlay exist, is there a loading screen, is there a game-over
 screen at all. `spawn_audit_ui` answers that from the filesystem alone, scoring each of
-[Interface In Game](https://interfaceingame.com)'s 21 named UI surfaces `present`,
-`thin`, or `missing`, and pointing every gap at the craft skill that fixes it and a
-reference link a human can open. `present` means a citing script or scene references
-art or style — it never claims a surface looks right; `spawn_play_screenshot` stays the
-only authority on that. Works on both engine lanes. Reference links point at
-interfaceingame.com but are never fetched by this server.
+[Interface In Game](https://interfaceingame.com)'s 21 named UI surfaces `found` or
+`missing`, and pointing every gap at the craft skill that fixes it and a reference link
+a human can open. `found` means only that the surface's name turned up in a path or
+identifier — it says nothing about whether the screen is built or styled;
+`spawn_play_screenshot` stays the only authority on how a surface actually looks. Works
+on both engine lanes. Reference links point at interfaceingame.com but are never fetched
+by this server.
 
 ## [2.0.0] - 2026-09-09
 

@@ -41,7 +41,25 @@ export type TreeReport = {
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build"]);
 const CHECK_TIMEOUT_MS = 60_000;
 
-/** Every file under `dir`, minus the directories nothing in a world lives in. */
+/**
+ * Every file under `dir`, minus the directories nothing in a world lives in.
+ *
+ * KNOWN DEFECT, deliberately not fixed here. This stats rather than lstats, so
+ * it FOLLOWS SYMLINKS, and it keeps no visited set. Measured on a tree whose
+ * `scripts/ui/loop` links back to `scripts/`: **64 paths for 1 real file, max
+ * depth 129 segments** before the OS refuses the path. It does not hang, but
+ * `checkTree` then syntax-checks 64 entries and `formatTreeReport` reports
+ * "checked 64 script(s)" — false, in a tool whose job is honest reporting
+ * (R-003) — and a link pointing out of the project is pre-flighted and cited at
+ * a fabricated project-relative path.
+ *
+ * Every other walker in this codebase already refuses links (`assets.ts`,
+ * `audit-tools.ts`, `compile.ts`, `harness.ts`, `ui-audit.ts`). This one is not
+ * changed with them because it feeds `spawn_validate` and `spawn_push`, so
+ * narrowing it narrows what gets syntax-checked before a live push — a
+ * behaviour change on the push path, and its own spec. `spawn_audit_ui` walks
+ * with its own `walkForCorpus` rather than wait for that.
+ */
 export function walkTree(dir: string, root = dir): string[] {
   const out: string[] = [];
   let entries: string[];

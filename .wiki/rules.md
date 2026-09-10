@@ -42,7 +42,7 @@ Anything reading a game handles both, or names the lane it does not handle and r
 there rather than returning a wrong answer.
 
 ## R-006: Local audit tools make no network calls
-Scope: src/audit-tools.ts, src/sweep.ts, src/harness.ts
+Scope: src/audit-tools.ts, src/sweep.ts, src/harness.ts, src/ui-audit.ts
 Added: 2026-09-10 | Source: README.md#local-audit
 The local audit exists because arithmetic does not need a browser. These tools need no
 credentials, no push, no live room, and no Chromium. A tool that reaches the network

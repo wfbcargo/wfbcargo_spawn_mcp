@@ -22,7 +22,10 @@ The two facts that explain most of the codebase:
    (architecture.md, R-005).
 2. **The engine injects `objectApi` as a parameter, never an import** — so a game
    function that does not take `api` runs in plain Node. That is the whole basis of the
-   local audit, which needs no browser, credentials, or live room.
+   **math** audit, which needs no browser, credentials, or live room. The UI audit
+   reaches the same no-browser conclusion by a different route: it runs no game code at
+   all, because whether a surface *exists* is answerable by reading text. Neither can say
+   how anything looks — that is `spawn_play_screenshot`'s alone.
 
 ## Decisions
 
