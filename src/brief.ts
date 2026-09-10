@@ -15,6 +15,8 @@ export type BriefInput = {
   headVersion: number | null;
   baseVersion: number | null;
   hasKey: boolean;
+  /** Labels of spawn_audit_ui surfaces scored `missing` for this worktree. Empty or omitted says nothing — see R-004. */
+  missingUiSurfaces?: string[];
 };
 
 /** Shell-quote only when needed, so the common case stays copy-pasteable. */
@@ -38,6 +40,7 @@ function groupByLabel(claims: Array<{ pattern: string; label: string }>): string
 export function renderBrief(input: BriefInput): string {
   const { agent, teamSize, variantId, yourClaims, othersClaims, headVersion, baseVersion, hasKey } =
     input;
+  const missingUiSurfaces = input.missingUiSurfaces ?? [];
   const lines: string[] = [];
 
   lines.push(
@@ -71,6 +74,13 @@ export function renderBrief(input: BriefInput): string {
       baseVersion != null && baseVersion < headVersion
         ? `Head is v${headVersion}, your local rail is v${baseVersion}: run spawn_latest before you start.`
         : `Head is v${headVersion} and your local rail matches it.`
+    );
+    lines.push("");
+  }
+
+  if (missingUiSurfaces.length) {
+    lines.push(
+      `Missing UI surfaces: ${missingUiSurfaces.join(", ")}. spawn_audit_ui names the skill and reference for each.`
     );
     lines.push("");
   }

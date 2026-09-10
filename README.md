@@ -509,6 +509,13 @@ Its terms of use prohibit scraping, the screenshots are the games' own copyright
 begin with, and a filename this tool can't render would be worthless as reference
 anyway; the 21-surface vocabulary is the useful part, and that much is hardcoded here.
 
+Three places wire this in rather than leaving it a report someone has to remember to
+run. `spawn_push`'s own description points here for the question a screenshot can't
+answer — not how a surface looks, but whether it exists at all. `spawn_team_brief` runs
+the same check per worktree and names any `missing` surfaces in the brief it hands a
+builder. And the savi-conductor skill checks it on its slower Maintain cadence, turning
+each `missing` surface into a `ready` backlog entry that a later tick dispatches to Savi.
+
 ## Development
 
 ```bash

@@ -2,6 +2,20 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-10
+
+**Wire `spawn_audit_ui` into the moments a UI gap is actionable.** 2.1.0 shipped the audit
+itself; nothing called it. Screenshot answers how what you built looks, the audit answers
+what you never built at all, and now that second question shows up where the first one
+already does: `spawn_push`'s description names `spawn_audit_ui` alongside
+`spawn_play_screenshot`. `spawn_team_brief` runs the audit per worktree and names any
+`missing` surfaces in the brief it hands a builder — nothing is said about UI when there
+are none. And the savi-conductor skill checks it on its slower Maintain cadence (not every
+tick), turning each `missing` surface into a `ready` backlog entry that a later tick
+dispatches to Savi through the existing delegation loop. `renderBrief` stays pure: the
+missing-surface list arrives as an optional field the caller supplies, the same way
+`yourClaims` already does.
+
 ## [2.1.0] - 2026-09-10
 
 **`spawn_audit_ui`: a local, zero-network completeness check for a game's UI.** Reviewing

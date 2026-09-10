@@ -114,6 +114,17 @@ describe("renderBrief", () => {
   it("handles a team of one without saying 'one of 1 agents'", () => {
     assert.match(brief({ teamSize: 1 }), /one of 1 agent building/);
   });
+
+  it("says nothing about UI when there are no missing surfaces", () => {
+    assert.equal(/UI/.test(brief()), false);
+    assert.equal(/UI/.test(brief({ missingUiSurfaces: [] })), false);
+  });
+
+  it("names missing UI surfaces and points at spawn_audit_ui for the rest", () => {
+    const text = brief({ missingUiSurfaces: ["Game over", "Loading"] });
+    assert.match(text, /Missing UI surfaces: Game over, Loading\./);
+    assert.match(text, /spawn_audit_ui names the skill and reference for each\./);
+  });
 });
 
 describe("renderHandoff", () => {
