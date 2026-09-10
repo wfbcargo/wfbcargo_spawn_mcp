@@ -2,6 +2,20 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-10
+
+**`spawn_audit_ui`: a local, zero-network completeness check for a game's UI.** Reviewing
+a build has meant asking every question through the same instrument — a headed browser,
+a screenshot, a judgement call — even for a question that is really just counting. This
+one is: does a pause overlay exist, is there a loading screen, is there a game-over
+screen at all. `spawn_audit_ui` answers that from the filesystem alone, scoring each of
+[Interface In Game](https://interfaceingame.com)'s 21 named UI surfaces `present`,
+`thin`, or `missing`, and pointing every gap at the craft skill that fixes it and a
+reference link a human can open. `present` means a citing script or scene references
+art or style — it never claims a surface looks right; `spawn_play_screenshot` stays the
+only authority on that. Works on both engine lanes. Reference links point at
+interfaceingame.com but are never fetched by this server.
+
 ## [2.0.0] - 2026-09-09
 
 **Spawn 6 support.** Spawn 6 is not a new version of the thing this server talked to — it is a

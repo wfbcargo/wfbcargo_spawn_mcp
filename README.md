@@ -335,6 +335,7 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 |------|---------|
 | `spawn_audit_scan` | List exported functions and say which are auditable without a live room |
 | `spawn_audit_math` | Sweep pure functions across declared input domains and check invariants |
+| `spawn_audit_ui` | Count which of the 21 Interface In Game UI surfaces the project has |
 
 ### Play browser
 | Tool | Purpose |
@@ -463,6 +464,50 @@ against behaviour that never ran, which is worse than a check that declines to r
 
 `module.exports = { … }` helpers are loaded and scanned alongside `export function` ones. Both
 systems are in use, and in practice the pure math lives in the CommonJS half.
+
+`spawn_audit_ui` counts something different: not "is this function correct" but "does a
+pause overlay exist at all." It walks the project's scripts and scenes (git lane) or
+`game.json` plus any folded-out scripts (document lane) and looks for each of
+[Interface In Game](https://interfaceingame.com)'s 21 named UI surface types —
+`main-menu`, `inventory`, `skill-tree`, and so on — scoring each `present` (something
+citing it references art or style: a `cdn/` path, a colour literal, a font, a material),
+`thin` (evidence found, but nothing citing it looks styled yet), or `missing` (no
+evidence anywhere).
+
+```
+spawn_audit_ui                       # check audit/ui.json's `expect`, or the 6-surface baseline
+spawn_audit_ui expect=[…]            # try a different surface set without writing the file
+```
+
+**`present` means "cites art," not "looks right."** A static text scan cannot see a
+rendered screen; `spawn_play_screenshot` is the only thing that can, and every report
+says so.
+
+Like `audit/math.json`, `audit/ui.json` lives in the **game** project, because which
+surfaces a given game actually needs is not knowledge a generic server can hold:
+
+```json
+{
+  "expect": ["main-menu", "in-game", "settings", "overlay", "game-over", "inventory", "map"],
+  "ignore": ["credits"],
+  "genre": "rpg",
+  "theme": "fantasy"
+}
+```
+
+`expect` replaces the 6-surface baseline (`main-menu`, `in-game`, `settings`, `overlay`,
+`game-over`, `loading`) when present; `ignore` drops surfaces from the report entirely,
+so a puzzle game with no skill tree isn't scored against having one. `genre` and `theme`
+are validated against interfaceingame.com's own filter vocabulary and appended to every
+reference link; an unknown surface, genre, or theme fails with the full menu rather than
+scoring silently.
+
+Every `missing` or `thin` finding names the craft skill to load (`spawn_skill`) and a
+`interfaceingame.com/screenshots/?elements=…` link. That link is handed back as a URL
+for a **human** to open — this tool never fetches, crawls, or caches the site itself.
+Its terms of use prohibit scraping, the screenshots are the games' own copyright to
+begin with, and a filename this tool can't render would be worthless as reference
+anyway; the 21-surface vocabulary is the useful part, and that much is hardcoded here.
 
 ## Development
 
