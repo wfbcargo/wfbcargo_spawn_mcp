@@ -303,6 +303,44 @@ question it was built for: **what did you never build at all.**
 - **UI-C6** — `expect` is de-duplicated before scoring; duplicates inflated the headline.
 - **UI-C7** — the map-vs-mapping test asserted a weaker property than its name claimed.
 
+## Second review iteration (UI-C9 … UI-C14)
+
+The rewrite above was re-reviewed, and it had introduced two new high defects of its own.
+Both reproduced before acting.
+
+- **UI-C9** — the single-token rule missed `in-game`, which tokenizes to `in` + `game`:
+  two tokens, so it stayed a text needle. `in` is a JS keyword sitting beside `game*`
+  constantly, so `for (const key in gameObjects)` scored the in-game HUD as `found`. A
+  baseline surface, so it fired on the default path. **Fix:** a needle whose every token
+  is a stopword loses its text channel. The list is 11 words and deliberately tiny —
+  `over` is absent, so "game over" still matches; `in-game` keeps its filename channel
+  and its `hud` / `crosshair` / `health-bar` aliases.
+- **UI-C10** — an unparseable `game.json` was swallowed, so the scan succeeded against an
+  empty corpus and `missingUiSurfaceLabels` returned six surfaces instead of `null`. Its
+  own doc comment promised `null`. This is UI-C3's lie through a second door: a brief
+  printing six screens of work for a spec nothing ever read. **Fix:** refuse.
+- **UI-C11** — `JSON.stringify` with no indent collapsed the spec to one line, so any two
+  adjacent fields formed a phrase (`{"level":{"selection":…}}` → level-selection).
+  **Fix:** indent, so detection sees the real field structure.
+- **UI-C12** — the document lane has essentially one file path, so the path-only rule left
+  15 of 21 surfaces with no detection channel there at all, while the same game on the git
+  lane resolved fine. **Fix:** a `names` channel — every JSON key plus `id`/`name`/`type`
+  values. A key is chosen the way a filename is, so it earns a filename's trust; free
+  prose in a string value does not.
+- **UI-C13** — with `audit/ui.json` present, a bad id from the *argument* was blamed on the
+  file. `scanUi` is handed the merge and genuinely cannot tell, so it now names both
+  rather than picking one and being wrong half the time.
+
+### Accepted, not fixed
+
+**UI-C14** — a two-token needle still matches non-UI text: `texture-world-map.png` scores
+`map`, `console.log('download progress bar')` scores `progress`, and `{"press":"start"}`
+scores `start-screen` via the `press-start` alias. This is the cost of the text channel
+existing at all, and it is the *cheap* direction of error: a false `found` leaves a
+surface off the MISSING list, where a human still sees it under FOUND with a citation
+they can check. Narrowing further would cost real recall on the lane that needs it most.
+Stated here rather than silently tolerated.
+
 ## Out of scope
 
 - Any network call, to interfaceingame.com or anywhere else.

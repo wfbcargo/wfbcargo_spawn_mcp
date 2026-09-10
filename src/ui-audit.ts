@@ -424,6 +424,9 @@ export type UiCorpus = {
      *  no file on disk (UI-C4). */
     synthetic?: boolean;
   }>;
+  /** Deliberate names — JSON keys and `id`/`name`/`type` values. Chosen the way
+   *  a filename is, so they carry a filename's weight (UI-C12). */
+  names: Array<{ source: string; value: string }>;
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -560,7 +563,7 @@ function walkForCorpus(dir: string, root = dir): string[] {
   return out;
 }
 
-function gitLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
+function gitLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts" | "names"> {
   const files = walkForCorpus(dir).filter((f) => f.endsWith(".js") || f.endsWith(".scene"));
   const texts: Array<{ source: string; text: string }> = [];
   for (const rel of files) {
@@ -570,7 +573,7 @@ function gitLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
       /* vanished mid-scan */
     }
   }
-  return { files, texts };
+  return { files, texts, names: [] }; // filenames ARE the names channel on this lane
 }
 
 /**
@@ -588,27 +591,68 @@ function gitLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
  * already stringifies the non-`scripts` body to harvest `cdn/` paths this
  * same way; this follows it rather than inventing a second convention.
  */
-function documentLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
+/**
+ * Deliberate names in a GameSpec: every object KEY, plus every `id`/`name`/`type`
+ * VALUE. These are chosen the way a filename is, which is why detection trusts
+ * a single-token needle against them.
+ *
+ * The document lane has essentially one file path, so without this the
+ * path-only rule left 15 of the 21 surfaces — settings, loading and overlay
+ * among them — with no detection channel at all on that lane, while the same
+ * game as `.scene` files on the git lane resolved fine (UI-C12).
+ */
+function collectNames(value: unknown, out: Array<{ source: string; value: string }>, depth = 0): void {
+  if (depth > 25) return;
+  if (Array.isArray(value)) {
+    for (const v of value) collectNames(v, out, depth + 1);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, v] of Object.entries(value)) {
+    out.push({ source: "game.json", value: key });
+    if ((key === "id" || key === "name" || key === "type") && typeof v === "string") {
+      out.push({ source: "game.json", value: v });
+    }
+    collectNames(v, out, depth + 1);
+  }
+}
+
+function documentLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts" | "names"> {
   const files: string[] = [];
   const texts: Array<{ source: string; text: string; synthetic?: boolean }> = [];
+  const names: Array<{ source: string; value: string }> = [];
 
   const gamePath = join(dir, "game.json");
   if (existsSync(gamePath)) {
     files.push("game.json");
-    let spec: unknown = null;
+    let spec: unknown;
     try {
       spec = JSON.parse(readFileSync(gamePath, "utf8"));
-    } catch {
-      /* an unreadable game.json yields an empty corpus, not a crash — the
-         report shows everything missing rather than pretending it read
-         content that was never actually parsed */
+    } catch (e: any) {
+      // A game.json that does not parse is NOT an empty game. Reporting every
+      // surface missing for a spec nothing ever read is the same lie UI-C3
+      // closed at the lane level, arriving through a second door (UI-C10):
+      // the caller sees six screens of work that may all already exist.
+      throw new Error(
+        `game.json in ${dir} could not be parsed, so nothing was scanned: ${e?.message ?? e}. ` +
+          `Fix the file, or point spawn_audit_ui at a different project.`
+      );
     }
-    if (isRecord(spec)) {
+    if (!isRecord(spec)) {
+      throw new Error(
+        `game.json in ${dir} is not a JSON object, so nothing was scanned. ` +
+          `A document-lane world is a GameSpec document; this is ${Array.isArray(spec) ? "an array" : typeof spec}.`
+      );
+    }
+    {
       const { scripts, ...rest } = spec;
       if (Object.keys(rest).length) {
-        // synthetic: this is a stringify of the object, not a file with real
-        // lines, so a citation into it must never claim a line number (UI-C4).
-        texts.push({ source: "game.json (spec body)", text: JSON.stringify(rest), synthetic: true });
+        // Indented, one token per line: stringified flat, any two adjacent
+        // fields read as a contiguous phrase, so {"input":{"press":"start"}}
+        // matched "press start" (UI-C11). synthetic: not a file with real
+        // lines, so a citation never claims a line number (UI-C4).
+        texts.push({ source: "game.json (spec body)", text: JSON.stringify(rest, null, 2), synthetic: true });
+        collectNames(rest, names);
       }
       if (isRecord(scripts)) {
         for (const [key, body] of Object.entries(scripts)) {
@@ -641,7 +685,7 @@ function documentLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
     }
   }
 
-  return { files, texts };
+  return { files, texts, names };
 }
 
 /* -------------------------------------------------------------- detection */
@@ -698,15 +742,42 @@ function containsPhrase(haystack: string[], needle: string[]): boolean {
  * stated preference: a false "missing" sends someone to build what already
  * exists, a false "found" hides a gap that was never built at all.
  */
+/**
+ * Tokens that carry no surface signal in a *game* codebase, so a needle made
+ * only of them is not evidence in free text.
+ *
+ * `in-game` is why this exists. It tokenizes to `in` + `game`, which is two
+ * tokens, so the single-token rule left it matching prose — and `in` is a
+ * JavaScript keyword sitting next to `game*` constantly:
+ * `for (const key in gameObjects)` scored the in-game HUD as found (UI-C9).
+ * It is a baseline surface, so that fired on the default path.
+ *
+ * Kept deliberately tiny. `over` is absent, so "game over" still matches text;
+ * only a needle whose every token is in here loses its text channel, and it
+ * keeps its filename channel and its aliases (`hud`, `crosshair`, `health-bar`).
+ */
+const STOPWORDS = new Set(["a", "an", "the", "in", "on", "at", "of", "to", "for", "is", "game"]);
+const isStopword = (token: string): boolean => STOPWORDS.has(token);
+
 function detectSurface(surface: UiSurface, corpus: UiCorpus): Hit[] {
   const needles = [surface.id, ...surface.aliases].map(words);
-  const textNeedles = needles.filter((n) => n.length > 1);
+  const textNeedles = needles.filter((n) => n.length > 1 && !n.every(isStopword));
   const hits: Hit[] = [];
 
   for (const file of corpus.files) {
     const haystack = words(file);
     if (needles.some((n) => containsPhrase(haystack, n))) {
       hits.push({ source: file, weight: PATH_WEIGHT });
+    }
+  }
+
+  // A deliberate name — a JSON key, or an `id`/`name`/`type` value — is chosen
+  // the way a filename is, so it earns the same trust: single-token needles
+  // count here. Free prose inside a string value does not (UI-C12).
+  for (const { source, value } of corpus.names) {
+    const haystack = words(value);
+    if (needles.some((n) => containsPhrase(haystack, n))) {
+      hits.push({ source, weight: PATH_WEIGHT });
     }
   }
 
@@ -834,9 +905,15 @@ export function scanUi(dir: string, manifest: UiManifest | null): UiReport {
     // (UI-C5) — `scanUi` is regularly handed one built from tool arguments,
     // and blaming `audit/ui.json` for that is wrong when the file may not
     // even exist.
+    // When the file exists, `scanUi` still cannot tell whether a bad id came
+    // from it or from arguments that override it — it is handed the merge.
+    // So it names both rather than picking one and being wrong half the time
+    // (UI-C13). With no file there is only one possible source, so say so.
     validateManifest(
       manifest,
-      declared ? manifestFile : `the arguments passed to this call (no ${UI_MANIFEST_PATH} exists in ${dir})`
+      declared
+        ? `${manifestFile} (or the arguments passed to this call, which override it)`
+        : `the arguments passed to this call (no ${UI_MANIFEST_PATH} exists in ${dir})`
     );
   }
 

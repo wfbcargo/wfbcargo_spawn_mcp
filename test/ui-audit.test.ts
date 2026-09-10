@@ -318,8 +318,87 @@ describe("verdicts", () => {
       });
       const { verdict, citations } = findingOf(scanUi(dir, { expect: ["main-menu"] }), "main-menu");
       assert.equal(verdict, "found");
-      assert.deepEqual(citations, ["game.json (spec body)"], "no line number on a stringified, not a real, source");
+      // Two channels legitimately see this: the `mainMenu` key as a deliberate
+      // name (UI-C12) and the stringified body as text. What matters is that
+      // neither invents a line number, since neither is a file on disk.
+      assert.ok(citations.includes("game.json (spec body)"), "the spec body is a source");
+      assert.ok(
+        citations.every((c) => !/:\d+$/.test(c)),
+        `no line number on a source that is not a real file — got ${JSON.stringify(citations)}`
+      );
     });
+
+    it("finds a surface named only by a spec key, which no line of text spells out", () => {
+      // The document lane has one file path, so without the names channel a
+      // single-token needle like `settings` had no way to match here at all.
+      const dir = project({ "game.json": JSON.stringify({ ui: { settings: { volume: 1 } } }) });
+      const { verdict, citations } = findingOf(scanUi(dir, { expect: ["settings"] }), "settings");
+      assert.equal(verdict, "found");
+      assert.deepEqual(citations, ["game.json"]);
+    });
+  });
+});
+
+// UI-C9. `in-game` tokenizes to `in` + `game` — two tokens, so the
+// single-token rule left it matching prose, and `in` is a JS keyword that sits
+// beside `game*` constantly. It is a baseline surface, so this fired on the
+// default no-manifest path that feeds spawn_team_brief and the conductor.
+describe("needles made only of stopwords do not match free text", () => {
+  const gitLane = { ".spawn/engine.yaml": "era: 6.0\n", ".git/HEAD": "x\n" };
+  const inGame = (body: string) =>
+    findingOf(scanUi(project({ ...gitLane, "scripts/logic.js": body }), { expect: ["in-game"] }), "in-game").verdict;
+
+  it("does not read a for..in over a game object as an in-game HUD", () => {
+    assert.equal(inGame("for (const key in gameObjects) { tick(key); }"), "missing");
+  });
+
+  it("does not read an `in` operator against game state as an in-game HUD", () => {
+    assert.equal(inGame("if ('hp' in gameState) restore();"), "missing");
+  });
+
+  it("does not read the words 'in game' in a comment as an in-game HUD", () => {
+    assert.equal(inGame("// called once per tick while in game"), "missing");
+  });
+
+  it("still finds the in-game HUD through an alias that is not all stopwords", () => {
+    const dir = project({ ...gitLane, "scripts/ui/hud.js": "export function draw(){}" });
+    assert.equal(findingOf(scanUi(dir, { expect: ["in-game"] }), "in-game").verdict, "found");
+  });
+
+  it("keeps 'game over' matching text, since `over` is not a stopword", () => {
+    const dir = project({ ...gitLane, "scripts/logic.js": "show the game over screen" });
+    assert.equal(findingOf(scanUi(dir, { expect: ["game-over"] }), "game-over").verdict, "found");
+  });
+});
+
+// UI-C10. An unparseable game.json is not an empty game. Reporting every
+// surface missing for a spec nothing ever read is UI-C3's lie through a
+// second door — and `missingUiSurfaceLabels` promises null for exactly this.
+describe("a game.json that does not parse is refused, not read as empty", () => {
+  for (const [label, body] of [
+    ["a truncated object", '{"objects":['],
+    ["a trailing comma", '{"a":1,}'],
+    ["an array root", "[]"],
+    ["an empty file", ""],
+  ] as const) {
+    it(`refuses ${label} rather than reporting every surface missing`, () => {
+      const dir = project({ "game.json": body });
+      assert.throws(() => scanUi(dir, null), /could not be parsed|is not a JSON object/);
+      assert.equal(missingUiSurfaceLabels(dir), null, "the brief must say unknown, not clean");
+    });
+  }
+
+  it("still reads a valid spec", () => {
+    const dir = project({ "game.json": JSON.stringify({ ui: { mainMenu: {} } }) });
+    assert.ok(Array.isArray(missingUiSurfaceLabels(dir)));
+  });
+});
+
+// UI-C11. Stringified flat, any two adjacent fields read as one phrase.
+describe("the spec body does not fuse adjacent fields into a phrase", () => {
+  it("does not read {level:{selection:…}} as a level-selection screen", () => {
+    const dir = project({ "game.json": JSON.stringify({ level: { selection: "random" } }) });
+    assert.equal(findingOf(scanUi(dir, { expect: ["level-selection"] }), "level-selection").verdict, "missing");
   });
 });
 
