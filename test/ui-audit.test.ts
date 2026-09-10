@@ -269,6 +269,48 @@ describe("verdicts", () => {
     });
   });
 
+  // Emptying every surface's `aliases` array must break at least one test per
+  // shape below — each fixture is built so the surface's bare id, alone,
+  // could not produce the hit: only the listed alias can.
+  describe("alias coverage (T-1): each alias shape is load-bearing on its own", () => {
+    it("finds a single-token alias via a path match, where the id itself never appears", () => {
+      const dir = project({
+        ".spawn/engine.yaml": "era: 6.0\n",
+        ".git/HEAD": "x\n",
+        // "hud" is an alias of "in-game"; neither "in" nor "game" appears here.
+        "scripts/ui/hud.js": "export function draw(){ return true; }",
+      });
+      const report = scanUi(dir, { expect: ["in-game"] });
+      assert.equal(findingOf(report, "in-game").verdict, "found");
+      assert.deepEqual(findingOf(report, "in-game").citations, ["scripts/ui/hud.js"]);
+    });
+
+    it("finds a multi-token alias via a path match that does not also spell the id", () => {
+      const dir = project({
+        ".spawn/engine.yaml": "era: 6.0\n",
+        ".git/HEAD": "x\n",
+        // "title-screen" is an alias of "start-screen"; "start" appears nowhere.
+        "scripts/ui/title-screen.js": "export function draw(){}",
+      });
+      const report = scanUi(dir, { expect: ["start-screen"] });
+      assert.equal(findingOf(report, "start-screen").verdict, "found");
+      assert.deepEqual(findingOf(report, "start-screen").citations, ["scripts/ui/title-screen.js"]);
+    });
+
+    it("finds a multi-token alias via a free-text match, with no path evidence at all", () => {
+      const dir = project({
+        ".spawn/engine.yaml": "era: 6.0\n",
+        ".git/HEAD": "x\n",
+        // "defeat-screen" is an alias of "game-over"; "game" and "over" never
+        // appear adjacent (or at all) here or in the filename.
+        "scripts/logic.js": "shows the defeat screen after loss",
+      });
+      const report = scanUi(dir, { expect: ["game-over"] });
+      assert.equal(findingOf(report, "game-over").verdict, "found");
+      assert.deepEqual(findingOf(report, "game-over").citations, ["scripts/logic.js:1"]);
+    });
+  });
+
   describe("UI-C2 / UI-C4: the document lane sees the whole spec body, with no synthetic line numbers", () => {
     it("finds a nested UI object invisible to an id/name/type-only collection", () => {
       const dir = project({
