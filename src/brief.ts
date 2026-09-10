@@ -15,8 +15,12 @@ export type BriefInput = {
   headVersion: number | null;
   baseVersion: number | null;
   hasKey: boolean;
-  /** Labels of spawn_audit_ui surfaces scored `missing` for this worktree. Empty or omitted says nothing — see R-004. */
-  missingUiSurfaces?: string[];
+  /**
+   * Labels of spawn_audit_ui surfaces scored `missing` for this worktree.
+   * Empty says nothing (R-004); **null says the scan could not run**, which is
+   * not the same claim and must not render as a clean bill of health (R-003).
+   */
+  missingUiSurfaces?: string[] | null;
 };
 
 /** Shell-quote only when needed, so the common case stays copy-pasteable. */
@@ -40,7 +44,7 @@ function groupByLabel(claims: Array<{ pattern: string; label: string }>): string
 export function renderBrief(input: BriefInput): string {
   const { agent, teamSize, variantId, yourClaims, othersClaims, headVersion, baseVersion, hasKey } =
     input;
-  const missingUiSurfaces = input.missingUiSurfaces ?? [];
+  const missingUiSurfaces = input.missingUiSurfaces;
   const lines: string[] = [];
 
   lines.push(
@@ -78,7 +82,17 @@ export function renderBrief(input: BriefInput): string {
     lines.push("");
   }
 
-  if (missingUiSurfaces.length) {
+  // null is "the scan could not run", which must not look like "nothing is
+  // missing" — a brief is read as ground truth (R-003). An empty list is the
+  // real clean answer and stays silent (R-004).
+  if (missingUiSurfaces === null) {
+    lines.push(
+      "UI completeness unknown here: spawn_audit_ui could not read this project (an invalid " +
+        "audit/ui.json, or a directory it cannot recognise as either engine lane). Run it yourself " +
+        "before trusting that the UI is complete."
+    );
+    lines.push("");
+  } else if (missingUiSurfaces?.length) {
     lines.push(
       `Missing UI surfaces: ${missingUiSurfaces.join(", ")}. spawn_audit_ui names the skill and reference for each.`
     );

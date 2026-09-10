@@ -653,6 +653,52 @@ export type UiReport = {
   notExpected: string[];
 };
 
+/**
+ * Fold a caller's arguments onto whatever `audit/ui.json` declared.
+ *
+ * Precedence, not marshalling — which is why it lives here and is tested here
+ * rather than sitting in the tool handler: each argument overrides ONLY its own
+ * field, so aiming a reference link with `genre` cannot silently discard the
+ * file's `expect` and check a different surface set than the game declared.
+ * `ignore` is deliberately not overridable from arguments: it is the game's
+ * standing statement that a surface does not apply, and a per-call flag is the
+ * wrong place to revoke it.
+ */
+export function mergeUiManifest(
+  file: UiManifest | null,
+  args: { expect?: string[]; genre?: string; theme?: string }
+): UiManifest | null {
+  const { expect, genre, theme } = args;
+  if (expect === undefined && genre === undefined && theme === undefined) return file;
+  return {
+    expect: expect ?? file?.expect,
+    ignore: file?.ignore,
+    genre: genre ?? file?.genre,
+    theme: theme ?? file?.theme,
+  };
+}
+
+/**
+ * Labels of the surfaces scored `missing` for a project, or **null when the
+ * scan could not run** — an unrecognisable directory, an unreadable
+ * `game.json`, a slug typo `validateManifest` correctly refuses.
+ *
+ * The null matters more than it looks. A caller that collapses failure to an
+ * empty list reports "nothing is missing" for a scan that never happened, and
+ * a brief handed to a builder is read as ground truth. That is R-003: a result
+ * that did not cover everything must not read as one that did.
+ */
+export function missingUiSurfaceLabels(dir: string): string[] | null {
+  try {
+    const manifest = loadUiManifest(join(dir, UI_MANIFEST_PATH));
+    return scanUi(dir, manifest)
+      .findings.filter((f) => f.verdict === "missing")
+      .map((f) => f.label);
+  } catch {
+    return null;
+  }
+}
+
 export function scanUi(dir: string, manifest: UiManifest | null): UiReport {
   if (manifest) validateManifest(manifest);
 

@@ -7,6 +7,8 @@ import {
   ALL_SURFACE_IDS,
   formatUiReport,
   loadUiManifest,
+  mergeUiManifest,
+  missingUiSurfaceLabels,
   scanUi,
   type UiManifest,
 } from "../src/ui-audit.js";
@@ -258,6 +260,74 @@ describe("reference links", () => {
       findingOf(report, "main-menu").reference,
       "https://interfaceingame.com/screenshots/?elements=main-menu&genres=rpg&themes=fantasy"
     );
+  });
+});
+
+// Precedence, not marshalling: this is what stops a per-call link hint from
+// silently changing which surfaces get checked.
+describe("mergeUiManifest", () => {
+  const file: UiManifest = { expect: ["map"], ignore: ["credits"], genre: "rpg", theme: "fantasy" };
+
+  it("returns the file manifest untouched when no argument was passed", () => {
+    assert.equal(mergeUiManifest(file, {}), file);
+    assert.equal(mergeUiManifest(null, {}), null);
+  });
+
+  it("keeps the file's expect when only a link hint is passed", () => {
+    const merged = mergeUiManifest(file, { genre: "puzzle" });
+    assert.deepEqual(merged?.expect, ["map"], "a genre hint must not change the surface set");
+    assert.equal(merged?.genre, "puzzle");
+    assert.equal(merged?.theme, "fantasy", "untouched fields survive");
+  });
+
+  it("never lets an argument revoke the file's ignore list", () => {
+    assert.deepEqual(mergeUiManifest(file, { expect: ["settings"] })?.ignore, ["credits"]);
+  });
+
+  it("builds a manifest from arguments alone when there is no file", () => {
+    assert.deepEqual(mergeUiManifest(null, { expect: ["settings"] }), {
+      expect: ["settings"],
+      ignore: undefined,
+      genre: undefined,
+      theme: undefined,
+    });
+  });
+});
+
+describe("missingUiSurfaceLabels", () => {
+  it("returns labels for the surfaces scored missing", () => {
+    const dir = project({
+      ".spawn/engine.yaml": "era: 6.0\n",
+      ".git/HEAD": "x\n",
+      "audit/ui.json": JSON.stringify({ expect: ["map", "settings"] }),
+      "scripts/ui/settings.js": "export function open(){}",
+    });
+    assert.deepEqual(missingUiSurfaceLabels(dir), ["Map"]);
+  });
+
+  it("returns null — not an empty list — when the scan cannot run", () => {
+    // A directory that is neither lane. Collapsing this to [] would report
+    // "nothing is missing" for a scan that never happened (R-003).
+    assert.equal(missingUiSurfaceLabels(project({ "readme.txt": "not a game" })), null);
+  });
+
+  it("returns null when audit/ui.json names a surface that does not exist", () => {
+    const dir = project({
+      ".spawn/engine.yaml": "era: 6.0\n",
+      ".git/HEAD": "x\n",
+      "audit/ui.json": JSON.stringify({ expect: ["invnetory"] }),
+    });
+    assert.equal(missingUiSurfaceLabels(dir), null);
+  });
+
+  it("distinguishes a genuinely complete UI from a failed scan", () => {
+    const dir = project({
+      ".spawn/engine.yaml": "era: 6.0\n",
+      ".git/HEAD": "x\n",
+      "audit/ui.json": JSON.stringify({ expect: ["settings"] }),
+      "scripts/ui/settings.js": "export function open(){}",
+    });
+    assert.deepEqual(missingUiSurfaceLabels(dir), [], "clean is an empty list, never null");
   });
 });
 

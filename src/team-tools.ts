@@ -8,7 +8,7 @@ import { listConflictReceipts, readBaseVersion } from "./compile.js";
 import { resolveApiUrl } from "./config.js";
 import { loadEnv, maskToken, resolveProjectDir, upsertEnv } from "./env.js";
 import { initProject } from "./tools.js";
-import { loadUiManifest, scanUi, UI_MANIFEST_PATH } from "./ui-audit.js";
+import { missingUiSurfaceLabels } from "./ui-audit.js";
 import {
   addClaim,
   agentFor,
@@ -35,23 +35,6 @@ function text(data: unknown) {
 
 function err(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true as const };
-}
-
-/**
- * Labels of `missing` spawn_audit_ui surfaces for an agent's worktree, best
- * effort: an unrecognisable project or a bad audit/ui.json is a reason to
- * leave the brief's UI line out, not to fail the whole brief — the same
- * posture as the head-version lookup just above this call site.
- */
-function missingUiLabels(dir: string): string[] {
-  try {
-    const manifest = loadUiManifest(resolve(dir, UI_MANIFEST_PATH));
-    return scanUi(dir, manifest)
-      .findings.filter((f) => f.verdict === "missing")
-      .map((f) => f.label);
-  } catch {
-    return [];
-  }
 }
 
 const projectDirSchema = z
@@ -321,7 +304,7 @@ export function registerTeamTools(server: McpServer): void {
           headVersion,
           baseVersion: present ? readBaseVersion(agent.projectDir) : null,
           hasKey: present ? Boolean(loadEnv(agent.projectDir).agentKey) : false,
-          missingUiSurfaces: present ? missingUiLabels(agent.projectDir) : [],
+          missingUiSurfaces: present ? missingUiSurfaceLabels(agent.projectDir) : undefined,
         });
         const missing = present ? "" : `\n\n(WARNING: ${agent.projectDir} does not exist. Create the worktree before starting this agent.)`;
         return `=== ${agent.label} — start a session in ${agent.projectDir} and paste everything below ===\n\n${body}${missing}`;

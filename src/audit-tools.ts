@@ -24,6 +24,7 @@ import {
   formatUiReport,
   GENRES,
   loadUiManifest,
+  mergeUiManifest,
   scanUi,
   THEMES,
   UI_MANIFEST_PATH,
@@ -312,18 +313,7 @@ export function registerAuditTools(server: McpServer): void {
         return err(e?.message ?? String(e));
       }
 
-      // Each tool argument overrides only its own field, on top of whatever
-      // audit/ui.json declared (or a fresh manifest if it declared nothing) —
-      // so passing `genre` alone doesn't discard a file's `expect`/`ignore`.
-      const manifest: UiManifest | null =
-        expect !== undefined || genre !== undefined || theme !== undefined
-          ? {
-              expect: expect ?? fileManifest?.expect,
-              ignore: fileManifest?.ignore,
-              genre: genre ?? fileManifest?.genre,
-              theme: theme ?? fileManifest?.theme,
-            }
-          : fileManifest;
+      const manifest = mergeUiManifest(fileManifest, { expect, genre, theme });
 
       let report;
       try {
