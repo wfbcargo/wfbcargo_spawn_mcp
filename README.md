@@ -502,7 +502,7 @@ are validated against interfaceingame.com's own filter vocabulary and appended t
 reference link; an unknown surface, genre, or theme fails with the full menu rather than
 scoring silently.
 
-Every `missing` or `thin` finding names the craft skill to load (`spawn_skill`) and a
+Every `missing` or `thin` finding names the craft skill to load (`spawn_skill`) and an
 `interfaceingame.com/screenshots/?elements=…` link. That link is handed back as a URL
 for a **human** to open — this tool never fetches, crawls, or caches the site itself.
 Its terms of use prohibit scraping, the screenshots are the games' own copyright to
