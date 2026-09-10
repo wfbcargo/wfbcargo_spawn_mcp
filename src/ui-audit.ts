@@ -13,7 +13,7 @@
  *
  * Both engine lanes are handled, because the on-disk shape of "a UI object
  * exists" differs completely between them: the git lane is a tree of scripts
- * and scenes (`walkTree` finds them), the document lane is one compiled
+ * and scenes, the document lane is one compiled
  * `game.json` plus whatever scripts have been folded onto disk beside it. A
  * directory that matches neither shape is refused rather than reported as an
  * empty game — an empty report and "this is not a Spawn project" must never
@@ -33,11 +33,10 @@
  * verified vocabulary — not something this code could look up even if it
  * wanted to.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { z } from "zod";
 import { isGitLane } from "./engine.js";
-import { walkTree } from "./tree.js";
 
 /* ------------------------------------------------------------------ catalog */
 
@@ -395,9 +394,48 @@ function detectLane(dir: string): LaneDetection {
   );
 }
 
-/** Git lane: walkTree already skips .git, node_modules, dist, build — reused rather than rewalking. */
+/** Directories no part of a world lives in. Mirrors `tree.ts`'s own skip list. */
+const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build"]);
+
+/**
+ * Walk the world tree for corpus files, refusing symlinks.
+ *
+ * `tree.ts`'s `walkTree` would be the obvious reuse, but it stats rather than
+ * lstats — it follows symlinks and keeps no visited set. It does not hang on a
+ * cycle (the OS refuses the path long before that), but measured on a tree
+ * whose `scripts/ui/loop` links back to `scripts/`, it returns **64 paths for
+ * one real file**, nested to depth 129. That would read the same file 64 times
+ * and cite it at 64 absurd paths. A link pointing out of the project is read in
+ * as well.
+ *
+ * Neither is fixable after the walk — the duplicates are produced during it. So
+ * this refuses symlinked entries as it goes, the way `audit-tools.ts`,
+ * `assets.ts`, `compile.ts` and `harness.ts` all already do; a fifth such
+ * walker is the house pattern here, not a novelty.
+ *
+ * `walkTree` itself is deliberately left alone: it is also what `spawn_validate`
+ * checks a tree with before a push, and changing what gets syntax-checked there
+ * is a decision of its own rather than a side effect of this one.
+ */
+function walkForCorpus(dir: string, root = dir): string[] {
+  const out: string[] = [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || SKIP_DIRS.has(entry.name)) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkForCorpus(full, root));
+    else if (entry.isFile()) out.push(relative(root, full).split(sep).join("/"));
+  }
+  return out;
+}
+
 function gitLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
-  const files = walkTree(dir).filter((f) => f.endsWith(".js") || f.endsWith(".scene"));
+  const files = walkForCorpus(dir).filter((f) => f.endsWith(".js") || f.endsWith(".scene"));
   const texts: Array<{ source: string; text: string }> = [];
   for (const rel of files) {
     try {
@@ -464,7 +502,7 @@ function documentLaneCorpus(dir: string): Pick<UiCorpus, "files" | "texts"> {
 
   const scriptsDir = join(dir, "scripts");
   if (existsSync(scriptsDir)) {
-    for (const rel of walkTree(dir).filter((f) => f.startsWith("scripts/") && f.endsWith(".js"))) {
+    for (const rel of walkForCorpus(dir).filter((f) => f.startsWith("scripts/") && f.endsWith(".js"))) {
       if (files.includes(rel)) continue; // already folded into game.json's script map
       files.push(rel);
       try {

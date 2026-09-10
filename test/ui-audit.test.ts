@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -128,6 +128,48 @@ describe("verdicts", () => {
     const { citations } = findingOf(scanUi(dir, { expect: ["settings"] }), "settings");
     assert.equal(citations.length, 4, "three citations plus the overflow line");
     assert.equal(citations.at(-1), "(+3 more)");
+  });
+
+  // The corpus walker refuses symlinks as it goes. Filtering after the walk
+  // could not have worked: the duplicates are produced during it — tree.ts's
+  // walkTree returns 64 paths for one real file on the cycle fixture below.
+  // Directory symlinks need admin rights on Windows, so skip there rather than
+  // assert something the platform won't let us build.
+  const canSymlinkDirs = (() => {
+    if (process.platform !== "win32") return true;
+    try {
+      const d = project({ "a/keep.js": "" });
+      symlinkSync(join(d, "a"), join(d, "link"), "junction");
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it("cites a file once on a symlinked directory cycle, not once per phantom path", { skip: !canSymlinkDirs }, () => {
+    const dir = project({
+      ".spawn/engine.yaml": "era: 6.0\n",
+      ".git/HEAD": "x\n",
+      "scripts/ui/settings.js": "export function open(){}",
+    });
+    // scripts/ui/loop -> scripts, so scripts/ui/loop/ui/loop/… keeps descending.
+    symlinkSync(join(dir, "scripts"), join(dir, "scripts", "ui", "loop"), "junction");
+    const { verdict, citations } = findingOf(scanUi(dir, { expect: ["settings"] }), "settings");
+    assert.equal(verdict, "thin", "the real file is still found");
+    // Path hit only: the body says nothing about settings, the filename does.
+    assert.deepEqual(citations, ["scripts/ui/settings.js"], "exactly one path, not a nested phantom");
+  });
+
+  it("does not read a file linked in from outside the project", { skip: !canSymlinkDirs }, () => {
+    const outside = project({ "secret/inventory-notes.js": "// backpack item-grid" });
+    const dir = project({
+      ".spawn/engine.yaml": "era: 6.0\n",
+      ".git/HEAD": "x\n",
+      "scripts/keep.js": "export function keep(){}",
+    });
+    symlinkSync(join(outside, "secret"), join(dir, "scripts", "linked"), "junction");
+    const report = scanUi(dir, { expect: ["inventory"] });
+    assert.equal(findingOf(report, "inventory").verdict, "missing", "linked-in file must not enter the corpus");
   });
 
   it("does not false-positive a short alias against a longer word (map vs mapping)", () => {
