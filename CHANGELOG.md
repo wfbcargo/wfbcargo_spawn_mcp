@@ -2,6 +2,46 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-10
+
+**Wire `spawn_audit_ui` into the moments a UI gap is actionable.** 2.1.0 shipped the audit
+itself; nothing called it. Screenshot answers how what you built looks, the audit answers
+what you never built at all, and now that second question shows up where the first one
+already does: `spawn_push`'s description names `spawn_audit_ui` alongside
+`spawn_play_screenshot`. `spawn_team_brief` runs the audit per worktree and names any
+`missing` surfaces in the brief it hands a builder — nothing is said about UI when there
+are none. And the savi-conductor skill checks it on its slower Maintain cadence (not every
+tick), turning each `missing` surface into a `ready` backlog entry that a later tick
+dispatches to Savi through the existing delegation loop. `renderBrief` stays pure: the
+missing-surface list arrives as an optional field the caller supplies, the same way
+`yourClaims` already does.
+
+**The UI corpus refuses symlinks.** `spawn_audit_ui` had been walking a game tree with the
+same helper `spawn_validate` uses, which follows links and keeps no visited set. On a tree
+whose `scripts/ui/loop` links back to `scripts/` that returns 64 paths for one real file,
+nested to depth 129 before the OS refuses the path — so the audit read that file 64 times
+and would have cited it at 64 absurd paths — and a link pointing outside the project was
+read in as well. The corpus now has its own walker that reads directory entries with lstat
+semantics and never descends into a link, matching what every other walker here already
+does. **The shared helper is unchanged and still has this defect** — it is also what checks
+a tree before a push, and changing what gets syntax-checked there is a decision of its own —
+so the fix is bounded to `spawn_audit_ui`; `spawn_validate` still follows links today.
+
+## [2.1.0] - 2026-09-10
+
+**`spawn_audit_ui`: a local, zero-network completeness check for a game's UI.** Reviewing
+a build has meant asking every question through the same instrument — a headed browser,
+a screenshot, a judgement call — even for a question that is really just counting. This
+one is: does a pause overlay exist, is there a loading screen, is there a game-over
+screen at all. `spawn_audit_ui` answers that from the filesystem alone, scoring each of
+[Interface In Game](https://interfaceingame.com)'s 21 named UI surfaces `found` or
+`missing`, and pointing every gap at the craft skill that fixes it and a reference link
+a human can open. `found` means only that the surface's name turned up in a path or
+identifier — it says nothing about whether the screen is built or styled;
+`spawn_play_screenshot` stays the only authority on how a surface actually looks. Works
+on both engine lanes. Reference links point at interfaceingame.com but are never fetched
+by this server.
+
 ## [2.0.0] - 2026-09-09
 
 **Spawn 6 support.** Spawn 6 is not a new version of the thing this server talked to — it is a

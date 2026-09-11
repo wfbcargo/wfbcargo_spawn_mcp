@@ -123,6 +123,13 @@ Spend the rest of the tick doing real work in your own area: edit → `spawn_val
 - Update the status counts and `head at last reconcile` in `index.md`.
 - Keep `areas/*.md` current where work landed — concrete state (files, object roots, what a
   screenshot shows), so a fresh conductor trusts the wiki over guesswork.
+- **Check UI completeness, on this slower cadence only** — not every tick, or it becomes
+  noise: `spawn_audit_ui`. Turn each `missing` surface into a `ready` backlog entry, named
+  for the surface and carrying its `spawn_skill ids=[…]` straight from the report. Do not
+  re-add a surface already sitting in the backlog under any status. A `found` verdict is
+  not a completed feature — it only means the surface's name turned up somewhere — but the
+  audit cannot tell you more than that, and this loop isn't the tool that judges how a
+  found surface looks; that's `spawn_play_screenshot`.
 - Commit only if the wiki changed this tick: `git add docs/savi-wiki`, and if `git diff
   --cached --quiet` reports changes, `git commit -m "conductor: tick <iso>"`. A tick that
   only looked and found nothing new leaves no commit. The history is the build's audit trail.

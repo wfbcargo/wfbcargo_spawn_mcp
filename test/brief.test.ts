@@ -114,6 +114,33 @@ describe("renderBrief", () => {
   it("handles a team of one without saying 'one of 1 agents'", () => {
     assert.match(brief({ teamSize: 1 }), /one of 1 agent building/);
   });
+
+  it("says nothing about UI when there are no missing surfaces", () => {
+    assert.equal(/UI/.test(brief()), false);
+    assert.equal(/UI/.test(brief({ missingUiSurfaces: [] })), false);
+  });
+
+  it("names missing UI surfaces and points at spawn_audit_ui for the rest", () => {
+    const text = brief({ missingUiSurfaces: ["Game over", "Loading"] });
+    assert.match(text, /Missing UI surfaces: Game over, Loading\./);
+    assert.match(text, /spawn_audit_ui names the skill and reference for each\./);
+  });
+
+  // A brief is read as ground truth, so "the scan failed" must not render the
+  // same as "nothing is missing" (R-003). null is the failed scan; [] is clean.
+  it("says UI completeness is unknown when the scan could not run", () => {
+    const text = brief({ missingUiSurfaces: null });
+    assert.match(text, /UI completeness unknown here/);
+    assert.match(text, /Run it yourself before trusting that the UI is complete\./);
+  });
+
+  it("does not confuse a failed scan with a clean one", () => {
+    assert.notEqual(
+      brief({ missingUiSurfaces: null }),
+      brief({ missingUiSurfaces: [] }),
+      "a failed scan and a complete UI must not produce identical briefs"
+    );
+  });
 });
 
 describe("renderHandoff", () => {

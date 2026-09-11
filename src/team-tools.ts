@@ -8,6 +8,7 @@ import { listConflictReceipts, readBaseVersion } from "./compile.js";
 import { resolveApiUrl } from "./config.js";
 import { loadEnv, maskToken, resolveProjectDir, upsertEnv } from "./env.js";
 import { initProject } from "./tools.js";
+import { missingUiSurfaceLabels } from "./ui-audit.js";
 import {
   addClaim,
   agentFor,
@@ -303,6 +304,7 @@ export function registerTeamTools(server: McpServer): void {
           headVersion,
           baseVersion: present ? readBaseVersion(agent.projectDir) : null,
           hasKey: present ? Boolean(loadEnv(agent.projectDir).agentKey) : false,
+          missingUiSurfaces: present ? missingUiSurfaceLabels(agent.projectDir) : undefined,
         });
         const missing = present ? "" : `\n\n(WARNING: ${agent.projectDir} does not exist. Create the worktree before starting this agent.)`;
         return `=== ${agent.label} — start a session in ${agent.projectDir} and paste everything below ===\n\n${body}${missing}`;

@@ -1,6 +1,7 @@
 /**
- * Local math audit: run a game's pure functions in plain Node and check
- * declared invariants against them.
+ * Local audit tools: run a game's pure functions in plain Node and check
+ * declared invariants against them, and count which of the 21 Interface In
+ * Game UI surfaces the project has, without ever opening a browser.
  *
  * This is the tier-L half of the review (REVIEW.md §E). It needs no browser, no
  * live room, no push and no credentials — which is the entire point, because
@@ -19,8 +20,20 @@ import {
   runSweep,
   type Manifest,
 } from "./sweep.js";
+import {
+  formatUiReport,
+  GENRES,
+  loadUiManifest,
+  mergeUiManifest,
+  scanUi,
+  THEMES,
+  UI_MANIFEST_PATH,
+  type UiManifest,
+} from "./ui-audit.js";
 
 const DEFAULT_MANIFEST = "audit/math.json";
+// The UI manifest path lives in ui-audit.ts: scanUi reads it too, and two
+// spellings of it would disagree silently.
 
 function text(data: unknown) {
   const body = typeof data === "string" ? data : JSON.stringify(data, null, 2);
@@ -264,6 +277,52 @@ export function registerAuditTools(server: McpServer): void {
         content: [{ type: "text" as const, text: body }],
         isError: report.summary.fail > 0 || report.summary.error > 0,
       };
+    }
+  );
+
+  server.registerTool(
+    "spawn_audit_ui",
+    {
+      description:
+        "Locally count which of the 21 Interface In Game UI surfaces this Spawn game project has: no browser, no live room, no push, no credentials. This is a text scan, not a look at the screen, so it can only tell you `found` or `missing`, never whether a surface is actually built or styled — a `missing` verdict means go build that surface: load the skills the report names with spawn_skill, then re-run this tool to confirm it. `found` means only that the surface's name turned up in a path or identifier; it is not a verdict on completeness or appearance, and spawn_play_screenshot is the only authority on how a surface actually looks. Reads audit/ui.json's `expect` list by default, falling back to a 6-surface baseline (main-menu, in-game, settings, overlay, game-over, loading) when the file is absent; pass `expect` to try a different surface set without writing the file. Every finding also carries an interfaceingame.com reference link for a human to open — this tool never fetches that site itself. An unknown surface id, in `expect` here or in audit/ui.json's `expect`/`ignore`, fails with the full 21-slug menu instead of silently scoring it as missing.",
+      inputSchema: {
+        projectDir: projectDirSchema,
+        expect: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Surface ids to check instead of audit/ui.json's `expect` (or the 6-surface baseline, if neither exists) — try a set without writing the file first. An unknown id fails with the full 21-slug menu."
+          ),
+        genre: z
+          .enum(GENRES)
+          .optional()
+          .describe("Interface In Game genre to add to every reference link for this call, overriding audit/ui.json's `genre`."),
+        theme: z
+          .enum(THEMES)
+          .optional()
+          .describe("Interface In Game theme to add to every reference link for this call, overriding audit/ui.json's `theme`."),
+      },
+    },
+    async ({ projectDir, expect, genre, theme }) => {
+      const dir = resolveProjectDir(projectDir);
+
+      let fileManifest: UiManifest | null;
+      try {
+        fileManifest = loadUiManifest(resolve(dir, UI_MANIFEST_PATH));
+      } catch (e: any) {
+        return err(e?.message ?? String(e));
+      }
+
+      const manifest = mergeUiManifest(fileManifest, { expect, genre, theme });
+
+      let report;
+      try {
+        report = scanUi(dir, manifest);
+      } catch (e: any) {
+        return err(e?.message ?? String(e));
+      }
+
+      return text(formatUiReport(report));
     }
   );
 }

@@ -1156,7 +1156,7 @@ export function registerTools(server: McpServer): void {
         "merge .theirs receipts and push again. In team mode document-lane pushes are serialised and rebased onto head first. " +
         "Either way a successful push proves it parsed, nothing more — look at spawn_play_screenshot before calling the work done, and if " +
         "what you pushed is visual and untextured or plainly styled, the missing piece is a skill you did not load (spawn_skill ids: " +
-        "drawn-art, custom-materials, looks, game-ui).",
+        "drawn-art, custom-materials, looks, game-ui); spawn_audit_ui answers the other question, what UI you never built at all.",
       inputSchema: {
         projectDir: projectDirSchema,
         engineVersion: engineVersionSchema,

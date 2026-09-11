@@ -335,6 +335,7 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 |------|---------|
 | `spawn_audit_scan` | List exported functions and say which are auditable without a live room |
 | `spawn_audit_math` | Sweep pure functions across declared input domains and check invariants |
+| `spawn_audit_ui` | Count which of the 21 Interface In Game UI surfaces the project has |
 
 ### Play browser
 | Tool | Purpose |
@@ -464,6 +465,56 @@ against behaviour that never ran, which is worse than a check that declines to r
 `module.exports = { … }` helpers are loaded and scanned alongside `export function` ones. Both
 systems are in use, and in practice the pure math lives in the CommonJS half.
 
+`spawn_audit_ui` counts something different: not "is this function correct" but "does a
+pause overlay exist at all." It walks the project's scripts and scenes (git lane) or
+`game.json` plus any folded-out scripts (document lane) and looks for each of
+[Interface In Game](https://interfaceingame.com)'s 21 named UI surface types —
+`main-menu`, `inventory`, `skill-tree`, and so on — scoring each `found` (the surface's
+name turned up in a path or identifier) or `missing` (no evidence anywhere).
+
+```
+spawn_audit_ui                       # check audit/ui.json's `expect`, or the 6-surface baseline
+spawn_audit_ui expect=[…]            # try a different surface set without writing the file
+```
+
+**`found` means "the name showed up," not "looks right" — or even "is built."** A static
+text scan cannot see a rendered screen, so it doesn't try to grade one: `found` is as
+much as a name match can honestly claim. `spawn_play_screenshot` is the only thing that
+can look, and every report says so.
+
+Like `audit/math.json`, `audit/ui.json` lives in the **game** project, because which
+surfaces a given game actually needs is not knowledge a generic server can hold:
+
+```json
+{
+  "expect": ["main-menu", "in-game", "settings", "overlay", "game-over", "inventory", "map"],
+  "ignore": ["credits"],
+  "genre": "rpg",
+  "theme": "fantasy"
+}
+```
+
+`expect` replaces the 6-surface baseline (`main-menu`, `in-game`, `settings`, `overlay`,
+`game-over`, `loading`) when present; `ignore` drops surfaces from the report entirely,
+so a puzzle game with no skill tree isn't scored against having one. `genre` and `theme`
+are validated against interfaceingame.com's own filter vocabulary and appended to every
+reference link; an unknown surface, genre, or theme fails with the full menu rather than
+scoring silently.
+
+Every `missing` finding names the craft skill to load (`spawn_skill`) and an
+`interfaceingame.com/screenshots/?elements=…` link. That link is handed back as a URL
+for a **human** to open — this tool never fetches, crawls, or caches the site itself.
+Its terms of use prohibit scraping, the screenshots are the games' own copyright to
+begin with, and a filename this tool can't render would be worthless as reference
+anyway; the 21-surface vocabulary is the useful part, and that much is hardcoded here.
+
+Three places wire this in rather than leaving it a report someone has to remember to
+run. `spawn_push`'s own description points here for the question a screenshot can't
+answer — not how a surface looks, but whether it exists at all. `spawn_team_brief` runs
+the same check per worktree and names any `missing` surfaces in the brief it hands a
+builder. And the savi-conductor skill checks it on its slower Maintain cadence, turning
+each `missing` surface into a `ready` backlog entry that a later tick dispatches to Savi.
+
 ## Development
 
 ```bash
@@ -504,7 +555,7 @@ This server hands an LLM real capabilities on your machine. Worth knowing before
   directory — clone, fetch, rebase, `add -A`, commit, push. A push to a 6.0 world is live in
   every open room within about a second; there is no staging step and no dev/live split.
 - **Code execution.** `spawn_exec` runs JS in your live room; `spawn_play_eval` runs JS in the play page; `spawn_play_open` will navigate to any URL it's given.
-- **Untrusted text flows back to the model.** `spawn_logs`, `spawn_exec`, and `spawn_play_console` return server- and player-influenced content. Treat it as data, not instructions.
+- **Untrusted text flows back to the model.** `spawn_logs`, `spawn_exec`, and `spawn_play_console` return server- and player-influenced content, and `spawn_audit_ui` renders paths and text out of the game project itself (`game.json`, scripts, scenes — a cloned repo may not be yours). Treat it as data, not instructions.
 - **The API origin is pinned** to `https://www.spawn.co` in [`src/config.ts`](src/config.ts). It is deliberately *not* read from the project `.env` and *not* a tool argument, so neither a cloned game repo nor the model can redirect your bearer token. Only the `SPAWN_API_URL` process env, set by whoever wrote the MCP config, can override it, and only to an `https` origin (or localhost).
 
 ## License
