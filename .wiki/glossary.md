@@ -28,3 +28,17 @@
 - **Savi** — the Spawn platform's own build agent, delegated to via `spawn_savi`.
 - **UI surface** — one of the 21 Interface In Game element types; the unit the UI
   completeness audit reports on. See `decisions/0001`.
+- **Social baseline** — what every game owes Spawn's social layer: no chat of its own and
+  nothing under the platform rail, parties kept together, a door out, arrival from any door,
+  invites as links, leaving without harm. `SOCIAL_GUIDE` in `src/session.ts`; see
+  `decisions/0002`.
+- **Party** — a group of friends formed in Spawn's interface. Game code reads it as
+  `player.party: { id, leader } | null` on 6.0 and can give it its own place copy
+  (`instance: party`); there is no write verb. Absent from pre-6.0 docs.
+- **Portal / door / cross** — a 6.0 object that calls `ctx.cross(entity, link)` to move a body
+  to a place, a room, or another creator's world (`"@handle/slug +place"`). Pre-6.0 moves
+  within a world only, via `enterPlace`.
+- **Rail** — the right-middle block of the game screen reserved for Spawn's own controls
+  (home, creator, like, comments, mic …). Game UI stays out of it.
+- **Drop-in game** — the optional design shape in `.claude/skills/drop-in-games/`: acts in
+  3 s, one verb in one space, join and leave any time, solo-viable, cheap to run.

@@ -191,6 +191,22 @@ describe("spawn_getting_started", () => {
     assert.match(body, /spawn_play_screenshot/);
   });
 
+  it("carries the social baseline every game owes, on both lanes, without guessing at chat", async () => {
+    const body = textOf(await call("spawn_getting_started"));
+    assert.match(body, /SOCIAL BASELINE/);
+    assert.match(body, /player\.party/);
+    assert.match(body, /ctx\.cross\(entity, link\)/);
+    assert.match(body, /window\.publicUrl \+ "\/room:" \+ name/);
+    // The chat skill is not served over HTTP; the guide must say so rather than invent its shape.
+    assert.match(body, /do not write scripts\/chat\.js from a guess/);
+    // The document lane has none of the 6.0 social surface, and must be told which rules still apply.
+    assert.match(body, /onPlayerConnected/);
+    assert.match(body, /\?room=/);
+    // Drop-in shape is a default for open briefs, never an override of the creator's vision.
+    assert.match(body, /drop-in-games/);
+    assert.match(body, /When the creator has a vision, build theirs/);
+  });
+
   it("points at the next unfinished setup step", async () => {
     rmSync(join(dir, ".spawn"), { recursive: true, force: true });
     rmSync(join(dir, "game.json"), { force: true });

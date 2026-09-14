@@ -30,3 +30,4 @@ The two facts that explain most of the codebase:
 ## Decisions
 
 - [0001 — Interface In Game: links, not scraping](decisions/0001-interfaceingame-links-not-scraping.md)
+- [0002 — Social baseline in the server; drop-in design as an optional skill](decisions/0002-social-baseline-in-server-drop-in-as-skill.md)

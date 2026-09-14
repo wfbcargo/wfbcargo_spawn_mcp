@@ -2,6 +2,37 @@
 
 Notable changes to spawn-mcp. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-09-14
+
+**A social baseline in every build.** Spawn now carries chat, parties of friends, and portals
+that take a player and their party from one world into another — and a game can break all three
+without meaning to. `spawn_getting_started` and the `spawn_session` prompt now carry a
+`SOCIAL BASELINE` section, and `spawn_team_brief` points every builder at it:
+- Spawn owns chat, so a game builds none of its own and keeps its UI off the platform's rail.
+- A party that arrives together stays together (`player.party`, `instance: party`).
+- Every game has a visible door out (`ctx.cross`) and survives arrival from any door (`onArrive`).
+- Invites are links.
+- A player leaving never stalls a round or loses progress.
+
+The section is lane-aware: the pre-6.0 docs have no party field and no cross-world door, and the
+guide says which rules still apply there. Two things are stated as unknown rather than guessed.
+The 6.0 `chat` skill is not served by the skills endpoint, so agents are told not to write
+`scripts/chat.js` blind. And no doc states how a party follows through a door.
+
+**`drop-in-games`, an optional Claude skill.** It is a design lens for the weekly Spawn Jam and
+for open briefs: games you can act in within three seconds, one verb in one small space, safe to
+leave and come back to, solo-viable, cheap to run. It holds:
+- six tests a concept must pass
+- eight archetypes, with the platform hits that proved them and a Spawn 6.0 sketch for each
+- a design order, and the 6.0 moves (round referee on a `cadence`, `player.spectating`, offline
+  growth from timestamps, SQL on events)
+- jam-specific advice and a review checklist
+- a sourced research file on Spawn Jam winners, the 6.0 social surface, and Roblox, Fortnite
+  Creative, Rec Room, .io and Jackbox games
+
+`SESSION_GUIDE` nudges towards the shape only when the creator has not fixed a design. Why the
+baseline is server text while the shape is a skill is recorded in `.wiki/decisions/0002`.
+
 ## [2.2.0] - 2026-09-10
 
 **Wire `spawn_audit_ui` into the moments a UI gap is actionable.** 2.1.0 shipped the audit

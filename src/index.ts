@@ -7,7 +7,7 @@ import { registerAuditTools } from "./audit-tools.js";
 import { closePlay } from "./browser.js";
 import { registerPlayTools } from "./play-tools.js";
 import { registerPlayerTools } from "./player-tools.js";
-import { LANE_GUIDE, SESSION_GUIDE } from "./session.js";
+import { LANE_GUIDE, SESSION_GUIDE, SOCIAL_GUIDE } from "./session.js";
 import { initTeamMode } from "./team.js";
 import { registerTeamTools } from "./team-tools.js";
 import { registerTools } from "./tools.js";
@@ -29,7 +29,7 @@ server.registerPrompt(
   "spawn_session",
   {
     description:
-      "How to work on a Spawn game via this MCP: bootstrap → game → init → edit → push → play/screenshot → fix. Covers both engine lanes (6.0 git worlds and pre-6.0 document worlds) and multi-agent.",
+      "How to work on a Spawn game via this MCP: bootstrap → game → init → edit → push → play/screenshot → fix. Covers both engine lanes (6.0 git worlds and pre-6.0 document worlds), the social baseline (chat, parties, portals), and multi-agent.",
     argsSchema: {},
   },
   async () => ({
@@ -37,6 +37,8 @@ server.registerPrompt(
       {
         role: "user" as const,
         content: { type: "text" as const, text: `${SESSION_GUIDE}
+
+${SOCIAL_GUIDE}
 
 ${LANE_GUIDE}` },
       },

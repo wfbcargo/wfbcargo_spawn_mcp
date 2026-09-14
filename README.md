@@ -350,6 +350,41 @@ Projects created before this rail existed have no `.spawn/base-game.json`. Their
 
 Also: **`spawn_session`** prompt with the full loop (including multi-agent). `spawn_getting_started` returns the same text as a tool call, because most clients never surface prompts to the model.
 
+## Social baseline and drop-in games
+
+Spawn owns a social layer that games do not rebuild: text and voice chat, parties of friends, and
+doors that carry a player (and the party they came with) from one world into another. A game can
+still break it — a chat box of its own, a HUD under the platform's rail, a team shuffle that splits a
+party, an arrival hook that drops someone who came through a portal into the middle of a running
+match. So every game is held to a **social baseline**, and it ships in the server rather than in a
+skill: it is a requirement on every build, and `spawn_getting_started` is the one text every agent in
+every client actually reads.
+
+| The baseline | On 6.0 | On pre-6.0 |
+|---|---|---|
+| Chat is Spawn's; keep UI off the right-edge rail | no chat of your own; `player.displayName` on nameplates | same |
+| Parties arrive together and stay together | `player.party` (read-only), `instance: party` | no party field in the docs |
+| A door out, and arrival from any door | `ctx.cross(entity, link)`, `onArrive`, `onRefuse` | `enterPlace`, within the world only |
+| Invites are links | `window.publicUrl + "/room:" + name` | `window.publicUrl + "?room=" + name` |
+| Leaving never stalls a round or loses progress | `onLeave`, `player.state` saved at the moment it is earned | `onPlayerDisconnected` |
+
+Two parts of it are deliberately stated as unknown rather than written down. The 6.0 `chat` skill,
+which describes `scripts/chat.js` and the voice keys, is not served by the skills endpoint, so the
+guide tells agents not to write that file from a guess. And no fetched doc says *how* a party follows
+a member through a door, so the guide asks games to receive parties together rather than claiming a
+mechanism. The reasoning is in [`.wiki/decisions/0002`](.wiki/decisions/0002-social-baseline-in-server-drop-in-as-skill.md).
+
+**Drop-in games** are the optional half: the shape that suits the weekly [Spawn Jam](https://www.spawn.co/jam)
+and most open briefs — playable within three seconds, one verb in one small space, safe to leave and
+come back to, solo-viable but better with a party, cheap to run. `spawn_getting_started` nudges
+towards it only when the creator has not fixed a design. The depth lives in a Claude skill,
+[`.claude/skills/drop-in-games/`](.claude/skills/drop-in-games/SKILL.md): six tests a concept must
+pass, eight archetypes (round-based party, course, king of the hill, social deduction, create and vote,
+idle garden, hangout, co-op survival) with the Roblox, Fortnite Creative, Rec Room, .io and Jackbox
+games that proved them, a design order, the 6.0 moves that make each cheap, jam-specific advice, and a
+review checklist. The sourced research behind it sits beside it in `reference/research.md`. It is a
+lens, not a rule: a creator with a vision gets their game.
+
 ## Art and UI
 
 The most common quality gap in an agent build is visual, and it has two causes worth knowing.

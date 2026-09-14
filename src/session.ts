@@ -33,10 +33,57 @@ If a document-lane push ever answers world_is_git, the world was migrated mid-se
 and the result tells you the clone URL. Run spawn_init in a fresh directory and carry on there.`;
 
 /**
+ * The social baseline every game owes the platform: chat, parties, and doors
+ * out. It lives here rather than in an optional skill because it is not a
+ * style choice — Spawn carries players between worlds with their party, and a
+ * game that ignores that breaks the trip for everyone who arrives together.
+ * An optional skill only reaches the clients that load it; this text reaches
+ * every agent through `spawn_getting_started`.
+ *
+ * It states only what the engine docs show. The 6.0 `chat` skill is not served
+ * over the skills endpoint, so the shape of `scripts/chat.js` and the voice
+ * keys are named as unknown instead of guessed at (R-001).
+ */
+export const SOCIAL_GUIDE = `SOCIAL BASELINE — every game ships with this, whatever its genre. Not optional, and not a feature to add later.
+
+Spawn owns the social layer: text and voice chat, parties of friends, and doors that carry a player (and the party they came with) from one
+world into another. Your game does not rebuild any of it. Its job is to never break it, and to give it something to do.
+
+1. Chat is Spawn's. Never build a text-chat box, a voice system, or an in-game DM. Keep game UI out of the platform rail — the right-middle
+   block (about 50×340 px on the right edge) carrying home, creator, like, comments, near, mic, settings, camera — and keep ~150 px clear of
+   it on a phone. Show player.displayName on nameplates and scoreboards so what is said in chat can be matched to a body. Design moments worth
+   talking about: a reveal, a vote, a steal, an elimination, a close finish.
+   The chat skill (scripts/chat.js, and the voice keys on world.config.yaml) is NOT served by spawn_skill, so its shape is unknown here:
+   do not write scripts/chat.js from a guess. Leave the platform's chat and voice at their defaults unless the world's own docs show the shape.
+2. Parties arrive together; keep them together. On 6.0 every player row carries player.party: { id, leader } | null (read-only; parties
+   are formed in Spawn's interface, never by game code). In onArrive, put party members on the same team, side, spawn point, or match copy.
+   Never let routing, auto-balance, or a full match split a party: size team caps so a party fits, or open a fresh copy
+   (place config instance: party gives each party its own copy). A routing script that keeps publics out of party rooms (the
+   rooms-and-matchmaking skill's party- prefix) is the pattern.
+3. Every game has a door out, and accepts a door in. A portal is an object that calls ctx.cross(entity, link) — to one of its own places
+   ("+arena"), another room ("world:" + ctx.world.id + "/room:" + name), or another creator's world ("@handle/slug +place"). Put at least one
+   visible exit portal where a player who is finished will look for it (the lobby or the results screen). Its far side is the creator's
+   call — another of their worlds, or anyone's they name (the portals skill shows how an address is found) — so ask rather than invent one.
+   Make arrival work from any door: onArrive runs on boot AND on arrival, so a player coming through a portal mid-round must land somewhere
+   sensible, never inside a running match or under the floor. Handle onRefuse with a toast rather than silence. Load the portals skill for
+   the set piece: a door is a place in the world, not a button in a menu.
+4. Invites are links. window.publicUrl + "/room:" + name is the invite link on 6.0 (null on a headless surface — show the name to copy). Any
+   private room or match copy shows its code or a copy-link control so a friend can follow.
+5. Leaving is normal. onLeave runs whichever way a player left, so it must never stall a round, strand a party member, or lose progress:
+   save to player.state at the moment it is earned, let timers end rounds, and reassign whatever the leaver held.
+
+ENGINE LANES: all of the above is the 6.0 surface. On a pre-6.0 (document) world the docs expose no party field and no cross-world door:
+places are entered with enterPlace, invite links are window.publicUrl + "?room=" + name, and the join hooks are onPlayerConnected /
+onPlayerDisconnected. Build rules 1, 4 and 5 there, say plainly that party and cross-world portals need a 6.0 world, and start new games on 6.0.
+
+Check it before calling a build done: two bodies (spawn_client_join, plus a play client) arrive, leave, and come back without breaking a
+round; a screenshot shows no game UI under the rail; an exit portal is visible from where a finished player stands.`;
+
+/**
  * One source of truth for "how do I work on a Spawn game", shared by the
  * `spawn_session` prompt and the `spawn_getting_started` tool. Most MCP clients
  * never surface prompts to the model, so the tool is how this text actually
- * gets read. LANE_GUIDE above is appended to it by both.
+ * gets read. SOCIAL_GUIDE and LANE_GUIDE above are appended to it by both.
  */
 export const SESSION_GUIDE = `You are building a Spawn game via the spawn MCP tools.
 
@@ -58,6 +105,11 @@ Art, UI, and look — load the skills BEFORE building, not after it looks wrong:
 - Naming is creating. A cdn/ asset is generated on first fetch of its path and cached there forever, so the path IS the asset: reference cdn/moodboard-<slug>/<category>-<name>.<ext> and that model, texture, or clip comes into being. Use a canonical slug (lowpoly-cozy, painterly-fantasy, toon-vibrant, voxel-bright, realistic-gritty, scifi-neon, gothic-horror, pixel-bright, pixel-moody) so a world shares one namespace, and read the name once more before you commit: you cannot re-roll a path, only pick a different one. Bare cdn/<name>.<ext> with no moodboard folder is a global namespace shared with every other game — avoid it for anything you create.
 - Check the asset bank before you invent a name: spawn_asset_search finds paths you already used in this and other projects, with what they turned out to be. If a tool tells you the bank is empty or stale, run spawn_asset_sync first — it pulls every game on the account and harvests what each actually uses, which is the only account-wide record that exists. Treat "no match" from an unsynced bank as "unknown", never as "does not exist": inventing a second name for an asset you already have is permanent, because a path cannot be re-rolled. A path that worked is reusable across games verbatim. After creating one, spawn_asset_preview shows you the image inline, and spawn_asset_note is how the result stops being something only you remember. Your other art levers are code-drawn textures (drawn-art), scripted materials, and composed primitives; art the creator wants to art-direct interactively is worth handing to Savi with spawn_savi task, which you can do yourself without routing through the creator.
 - Judge art with your eyes, never from a successful push: push → spawn_play_screenshot → compare against the intent → iterate. Game UI renders in a cross-origin iframe, so screenshot-and-click coordinates is the only UI loop you have.
+
+Social — chat, parties and portals are part of every game, not an add-on: read SOCIAL BASELINE below before designing the first scene.
+Game shape — when the creator has not fixed one (a jam entry, "make me a game", an open brief), prefer a drop-in shape: playable within seconds,
+one small self-contained space, safe to leave and come back to, solo-viable but better with friends, and cheap to run (rounds, timers and
+discrete events; no swarms of AI or synced physics). If the drop-in-games skill is installed, load it. When the creator has a vision, build theirs.
 
 Build loop (show, don't tell):
 1. Edit project files.

@@ -105,6 +105,9 @@ export function renderBrief(input: BriefInput): string {
     "- Load the craft BEFORE building, not after it looks wrong: spawn_skill with every domain the work touches, look skills included. Untextured primitives and default DOM are a missing skill, not a missing feature."
   );
   lines.push(
+    "- Honour the social baseline in whatever you build (spawn_getting_started has it in full): Spawn owns chat, so no chat box of your own and nothing drawn under the right-edge rail; a party that arrives together stays together; players leaving never stalls a round."
+  );
+  lines.push(
     "- Claim anything else you need with spawn_team_claim before editing it. Claims only warn, so they work by everyone being honest about them."
   );
   lines.push(

@@ -57,7 +57,7 @@ import {
 } from "./git.js";
 import { absoluteUrl, checkClone, gitCreds } from "./lane.js";
 import { checkTree, formatTreeReport } from "./tree.js";
-import { LANE_GUIDE, SESSION_GUIDE } from "./session.js";
+import { LANE_GUIDE, SESSION_GUIDE, SOCIAL_GUIDE } from "./session.js";
 import { renderFleetLine, summarizeFleet } from "./wisps.js";
 import {
   agentFor,
@@ -465,7 +465,7 @@ export function registerTools(server: McpServer): void {
     "spawn_getting_started",
     {
       description:
-        "START HERE before any other spawn tool. The whole workflow in one call: setup order, the art/UI skills to load BEFORE building anything visual, the push → screenshot → fix loop, and the multi-agent rules. Also reports what this project already has (token, variant, game.json, docs) so you know which step you're on. Needs no credentials.",
+        "START HERE before any other spawn tool. The whole workflow in one call: setup order, the art/UI skills to load BEFORE building anything visual, the social baseline every game owes (chat, parties, portals), the push → screenshot → fix loop, and the multi-agent rules. Also reports what this project already has (token, variant, game.json, docs) so you know which step you're on. Needs no credentials.",
       inputSchema: { projectDir: projectDirSchema, engineVersion: engineVersionSchema },
     },
     async ({ projectDir, engineVersion }) => {
@@ -513,7 +513,7 @@ export function registerTools(server: McpServer): void {
         .join("\n");
 
       return text(
-        `${SESSION_GUIDE}\n\n${LANE_GUIDE}\n\n---\n\nThis project (${dir}):\n` +
+        `${SESSION_GUIDE}\n\n${SOCIAL_GUIDE}\n\n${LANE_GUIDE}\n\n---\n\nThis project (${dir}):\n` +
           `  engine: ${engineNote}\n${checklist}\n\nNext step: ${next}`
       );
     }

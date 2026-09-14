@@ -109,6 +109,9 @@ describe("renderBrief", () => {
     assert.match(text, /spawn_play_screenshot/);
     assert.match(text, /rebase onto head automatically/);
     assert.match(text, /\.theirs receipt/);
+    // A builder in a sliced team still owns the social baseline in its own slice.
+    assert.match(text, /social baseline/);
+    assert.match(text, /no chat box of your own/);
   });
 
   it("handles a team of one without saying 'one of 1 agents'", () => {
